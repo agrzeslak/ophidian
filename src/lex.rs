@@ -1,19 +1,31 @@
-use miette::{miette, IntoDiagnostic, Result};
-use nom::{branch::alt, bytes::complete::tag, character::complete::char, combinator::map};
+use miette::{Diagnostic, SourceSpan};
+use nom::{
+    branch::alt,
+    bytes::complete::tag,
+    character::complete::{char, newline},
+    combinator::map,
+};
+use thiserror::Error;
 
 #[derive(Clone, Debug)]
 pub struct Lexer<'a> {
+    whole: &'a str,
     rest: &'a str,
+    position: usize,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(code: &'a str) -> Self {
-        Self { rest: code }
+        Self {
+            whole: code,
+            rest: code,
+            position: 0,
+        }
     }
 }
 
 impl Iterator for Lexer<'_> {
-    type Item = Result<Token>;
+    type Item = Result<Token, LexError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.rest.len() == 0 {
@@ -96,10 +108,11 @@ impl Iterator for Lexer<'_> {
                 map(char('>'), |_| Token::GreaterThan),
                 map(char('{'), |_| Token::LeftBrace),
                 map(char('['), |_| Token::LeftBracket),
+                map(char('('), |_| Token::LeftParen),
             )),
             alt((
-                map(char('('), |_| Token::LeftParen),
                 map(char('<'), |_| Token::LessThan),
+                map(newline, |_| Token::NewLine),
                 map(char('-'), |_| Token::Minus),
                 map(char('%'), |_| Token::Percent),
                 map(char('+'), |_| Token::Plus),
@@ -113,11 +126,27 @@ impl Iterator for Lexer<'_> {
         ))(self.rest);
         match result {
             Ok((rest, token)) => {
+                // Update position based on how much the length of `rest` decreased
+                self.position += self.rest.len() - rest.len();
                 self.rest = rest;
                 Some(Ok(token))
             }
-            Err(nom::Err::Error(e) | nom::Err::Failure(e)) => Some(Err(miette!(e.to_string()))),
-            Err(_) => Some(Err(miette!("b"))),
+            Err(_) => {
+                let at = self.position;
+                let line = self.whole[0..=self.position].lines().count();
+                let column = at
+                    - self.whole[..self.position]
+                        .rfind('\n')
+                        .map(|i| i + 1)
+                        .unwrap_or(0)
+                    + 1;
+                Some(Err(LexError {
+                    src: self.whole.to_owned(),
+                    at: at.into(),
+                    line,
+                    column,
+                }))
+            }
         }
     }
 }
@@ -172,6 +201,7 @@ pub enum Token {
     LessThan,
     Minus,
     MinusEquals,
+    NewLine,
     None,
     Nonlocal,
     Not,
@@ -198,6 +228,19 @@ pub enum Token {
     Yield,
 }
 
+#[derive(Debug, Diagnostic, Error)]
+#[error("unrecognized token on line {line}, column {column}")]
+#[diagnostic(code("lexing error"))]
+pub struct LexError {
+    #[source_code]
+    pub src: String,
+
+    #[label("here")]
+    pub at: SourceSpan,
+    pub line: usize,
+    pub column: usize,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,9 +259,32 @@ mod tests {
     }
 
     #[test]
-    fn foo() {
-        let mut lexer = Lexer::new("foo");
-        dbg!(lexer.next().unwrap());
-        panic!();
+    fn lex_error_location() {
+        let mut lexer = Lexer::new("*/foo");
+        for _ in 0..2 {
+            lexer.next();
+        }
+        let error = lexer.next().unwrap().unwrap_err();
+        assert_eq!(error.at, SourceSpan::from(2));
+        assert_eq!(error.line, 1);
+        assert_eq!(error.column, 3);
+
+        let mut lexer = Lexer::new("*/\nfoo");
+        for _ in 0..3 {
+            lexer.next();
+        }
+        let error = lexer.next().unwrap().unwrap_err();
+        assert_eq!(error.at, SourceSpan::from(3));
+        assert_eq!(error.line, 2);
+        assert_eq!(error.column, 1);
+
+        let mut lexer = Lexer::new("*/\n*foo");
+        for _ in 0..4 {
+            lexer.next();
+        }
+        let error = lexer.next().unwrap().unwrap_err();
+        assert_eq!(error.at, SourceSpan::from(4));
+        assert_eq!(error.line, 2);
+        assert_eq!(error.column, 2);
     }
 }

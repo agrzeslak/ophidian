@@ -272,6 +272,7 @@ dependencies = [
  "clap",
  "miette",
  "nom",
+ "thiserror",
 ]
 
 [[package]]
