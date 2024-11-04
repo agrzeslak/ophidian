@@ -24,8 +24,8 @@ impl<'a> Lexer<'a> {
     }
 }
 
-impl Iterator for Lexer<'_> {
-    type Item = Result<Token, LexError>;
+impl<'a> Iterator for Lexer<'a> {
+    type Item = Result<Token<'a>, LexError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.rest.len() == 0 {
@@ -152,7 +152,7 @@ impl Iterator for Lexer<'_> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Token {
+pub enum Token<'a> {
     Ampersand,
     AmpersandEquals,
     And,
@@ -168,6 +168,7 @@ pub enum Token {
     Colon,
     ColonEquals,
     Comma,
+    Complex(&'a str),
     Continue,
     Def,
     Del,
@@ -186,6 +187,7 @@ pub enum Token {
     Except,
     False,
     Finally,
+    Float(&'a str),
     For,
     From,
     Global,
@@ -193,6 +195,7 @@ pub enum Token {
     If,
     Import,
     In,
+    Int(&'a str),
     Is,
     Lambda,
     LeftBrace,
@@ -286,5 +289,38 @@ mod tests {
         assert_eq!(error.at, SourceSpan::from(4));
         assert_eq!(error.line, 2);
         assert_eq!(error.column, 2);
+    }
+
+    #[test]
+    fn numbers() {
+        let mut lexer = Lexer::new("100-1_0_0_234-1.1--5.2+.6++.5*83.2_02-1j/3+5J-10_0j+0b1_00-0B10_1+0o80_2-0O2+0xFaB4/0XFF_A_D");
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("100"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("1_0_0_234"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("1.1"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("-5.2"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("+.6"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("+.5"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Star);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Complex("83.2_02-1j"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Slash);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Complex("3+5J"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Complex("-10_0j"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0b1_00"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0B10_1"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0o80_2"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0O2"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0xFaB4"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Slash);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0xFF_A_D"));
+        assert!(lexer.next().is_none());
     }
 }
