@@ -1,9 +1,12 @@
 use miette::{Diagnostic, SourceSpan};
 use nom::{
     branch::alt,
-    bytes::complete::tag,
-    character::complete::{char, newline},
-    combinator::map,
+    bytes::complete::{is_a, tag, tag_no_case},
+    character::complete::{char, digit0, digit1, newline, one_of},
+    combinator::{map, opt, recognize, verify},
+    multi::many0,
+    sequence::{pair, preceded, separated_pair},
+    IResult,
 };
 use thiserror::Error;
 
@@ -22,6 +25,69 @@ impl<'a> Lexer<'a> {
             position: 0,
         }
     }
+
+    fn parse_number(input: &str) -> IResult<&str, Token> {
+        alt((Self::parse_complex, Self::parse_float, Self::parse_int))(input)
+    }
+
+    fn parse_complex(input: &str) -> IResult<&str, Token> {
+        map(
+            recognize(pair(
+                opt(pair(
+                    alt((Self::parse_float, Self::parse_int)),
+                    one_of("+-"),
+                )),
+                pair(alt((Self::parse_float, Self::parse_decimal)), one_of("jJ")),
+            )),
+            |s| Token::Complex(s),
+        )(input)
+    }
+    fn parse_float(input: &str) -> IResult<&str, Token> {
+        map(
+            verify(
+                recognize(separated_pair(
+                    opt(Self::parse_decimal),
+                    char('.'),
+                    opt(Self::parse_decimal),
+                )),
+                |s: &str| s != ".",
+            ),
+            |s| Token::Float(s),
+        )(input)
+    }
+
+    fn parse_int(input: &str) -> IResult<&str, Token> {
+        alt((
+            map(
+                recognize(alt((
+                    preceded(
+                        tag_no_case("0b"),
+                        pair(digit1, many0(pair(opt(char('_')), is_a("01")))),
+                    ),
+                    preceded(
+                        tag_no_case("0o"),
+                        pair(digit1, many0(pair(opt(char('_')), is_a("01234567")))),
+                    ),
+                    preceded(
+                        tag_no_case("0x"),
+                        pair(
+                            digit1,
+                            many0(pair(opt(char('_')), is_a("0123456789abcdefABCDEF"))),
+                        ),
+                    ),
+                ))),
+                |s| Token::Int(s),
+            ),
+            Self::parse_decimal,
+        ))(input)
+    }
+
+    fn parse_decimal(input: &str) -> IResult<&str, Token> {
+        map(
+            recognize(pair(digit1, many0(pair(opt(char('_')), digit1)))),
+            |s| Token::Int(s),
+        )(input)
+    }
 }
 
 impl<'a> Iterator for Lexer<'a> {
@@ -34,6 +100,7 @@ impl<'a> Iterator for Lexer<'a> {
 
         // `alt` only supports up to 21 tuple values, hence they have been split up
         let result: nom::IResult<&str, Token, nom::error::Error<&str>> = alt((
+            Self::parse_number,
             // Keyword
             alt((
                 map(tag("and"), |_| Token::And),
@@ -151,7 +218,7 @@ impl<'a> Iterator for Lexer<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Token<'a> {
     Ampersand,
     AmpersandEquals,
@@ -293,28 +360,32 @@ mod tests {
 
     #[test]
     fn numbers() {
-        let mut lexer = Lexer::new("100-1_0_0_234-1.1--5.2+.6++.5*83.2_02-1j/3+5J-10_0j+0b1_00-0B10_1+0o80_2-0O2+0xFaB4/0XFF_A_D");
+        let mut lexer = Lexer::new("100-1_0_0_234-1.1--5.2+.6++.5*83.2_02-1j/3+5J-10_0j+0b1_00-0B10_1+0o70_2-0O2+0xFaB4/0XFF_A_D");
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("100"));
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("1_0_0_234"));
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("1.1"));
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("-5.2"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("+.6"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("5.2"));
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("+.5"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float(".6"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float(".5"));
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Star);
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Complex("83.2_02-1j"));
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Slash);
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Complex("3+5J"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Complex("-10_0j"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Complex("10_0j"));
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0b1_00"));
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0B10_1"));
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0o80_2"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0o70_2"));
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0O2"));
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
@@ -322,5 +393,7 @@ mod tests {
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Slash);
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0xFF_A_D"));
         assert!(lexer.next().is_none());
+        // TODO: tests that non-decimal numbers in real portion of complex number are OK, but not in
+        // complex part. Tests for underscores in floats.
     }
 }
