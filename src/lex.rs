@@ -1,11 +1,11 @@
 use miette::{Diagnostic, SourceSpan};
 use nom::{
     branch::alt,
-    bytes::complete::{is_a, tag, tag_no_case},
-    character::complete::{char, digit0, digit1, newline, one_of},
+    bytes::complete::{is_a, tag, tag_no_case, take_until},
+    character::complete::{char, digit1, newline, one_of},
     combinator::{map, opt, recognize, verify},
     multi::many0,
-    sequence::{pair, preceded, separated_pair, tuple},
+    sequence::{delimited, pair, preceded, tuple},
     IResult,
 };
 use thiserror::Error;
@@ -96,6 +96,30 @@ impl<'a> Lexer<'a> {
             |s| Token::Int(s),
         )(input)
     }
+
+    // TODO: Tests
+    fn parse_string(input: &str) -> IResult<&str, Token> {
+        map(
+            recognize(pair(
+                opt(alt((
+                    tag_no_case("rf"),
+                    tag_no_case("fr"),
+                    tag_no_case("rb"),
+                    tag_no_case("br"),
+                    tag_no_case("r"),
+                    tag_no_case("f"),
+                    tag_no_case("b"),
+                    tag_no_case("u"),
+                ))),
+                alt((
+                    delimited(char('\''), take_until("\'"), char('\'')),
+                    delimited(char('"'), take_until("\""), char('"')),
+                    delimited(tag("\"\"\""), take_until("\"\"\""), tag("\"\"\"")),
+                )),
+            )),
+            |s| Token::String(s),
+        )(input)
+    }
 }
 
 impl<'a> Iterator for Lexer<'a> {
@@ -109,6 +133,7 @@ impl<'a> Iterator for Lexer<'a> {
         // `alt` only supports up to 21 tuple values, hence they have been split up
         let result: nom::IResult<&str, Token, nom::error::Error<&str>> = alt((
             Self::parse_number,
+            Self::parse_string,
             // Keyword
             alt((
                 map(tag("and"), |_| Token::And),
@@ -301,6 +326,7 @@ pub enum Token<'a> {
     Space,
     Star,
     StarEquals,
+    String(&'a str),
     Tab,
     Tilde,
     True,
@@ -372,7 +398,7 @@ mod tests {
 
     #[test]
     fn numbers() {
-        let mut lexer = Lexer::new("100-1_0_0_234-1.1--5.2+.6++.5*83.2_02-1j/3+5J-10_0j+0b1_00-0B10_1+0o70_2-0O2+0xFaB4/0XFF_A_D+1_0.34_1+0xF0A-1.0_0j-87.7e100+12E4-1E-100-01e+100");
+        let mut lexer = Lexer::new("100-1_0_0_234-1.1--5.2+.6++.5*83.2_02-1j/3+5J-10_0j+0b1_00-0B10_1+0o70_2-0O2+0xFaB4/0XFF_A_D+1_0.34_1+0xF0A-1.0_0j-87.7e100+12E4-1E-100-01e+100+10e1+10j");
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("100"));
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("1_0_0_234"));
@@ -419,8 +445,8 @@ mod tests {
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("1E-100"));
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("01e+100"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Complex("10e1+10j"));
         assert!(lexer.next().is_none());
-        // TODO: tests that non-decimal numbers in real portion of complex number are OK, but not in
-        // complex part. Tests for underscores in floats.
     }
 }
