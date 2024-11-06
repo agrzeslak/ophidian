@@ -5,7 +5,7 @@ use nom::{
     character::complete::{char, digit0, digit1, newline, one_of},
     combinator::{map, opt, recognize, verify},
     multi::many0,
-    sequence::{pair, preceded, separated_pair},
+    sequence::{pair, preceded, separated_pair, tuple},
     IResult,
 };
 use thiserror::Error;
@@ -45,12 +45,17 @@ impl<'a> Lexer<'a> {
     fn parse_float(input: &str) -> IResult<&str, Token> {
         map(
             verify(
-                recognize(separated_pair(
+                recognize(tuple((
                     opt(Self::parse_decimal),
-                    char('.'),
+                    opt(char('.')),
                     opt(Self::parse_decimal),
-                )),
-                |s: &str| s != ".",
+                    opt(tuple((
+                        one_of("eE"),
+                        opt(one_of("+-")),
+                        Self::parse_decimal,
+                    ))),
+                ))),
+                |s: &str| s != "." && (s.contains('.') || s.contains('e') || s.contains('E')),
             ),
             |s| Token::Float(s),
         )(input)
@@ -179,9 +184,9 @@ impl<'a> Iterator for Lexer<'a> {
                 map(char('{'), |_| Token::LeftBrace),
                 map(char('['), |_| Token::LeftBracket),
                 map(char('('), |_| Token::LeftParen),
+                map(char('<'), |_| Token::LessThan),
             )),
             alt((
-                map(char('<'), |_| Token::LessThan),
                 map(newline, |_| Token::NewLine),
                 map(char('-'), |_| Token::Minus),
                 map(char('%'), |_| Token::Percent),
@@ -190,7 +195,9 @@ impl<'a> Iterator for Lexer<'a> {
                 map(char(']'), |_| Token::RightBracket),
                 map(char(')'), |_| Token::RightParen),
                 map(char('/'), |_| Token::Slash),
+                map(char(' '), |_| Token::Space),
                 map(char('*'), |_| Token::Star),
+                map(char('\t'), |_| Token::Tab),
                 map(char('~'), |_| Token::Tilde),
             )),
         ))(self.rest);
@@ -291,8 +298,10 @@ pub enum Token<'a> {
     RightParen,
     Slash,
     SlashEquals,
+    Space,
     Star,
     StarEquals,
+    Tab,
     Tilde,
     True,
     Try,
@@ -363,7 +372,7 @@ mod tests {
 
     #[test]
     fn numbers() {
-        let mut lexer = Lexer::new("100-1_0_0_234-1.1--5.2+.6++.5*83.2_02-1j/3+5J-10_0j+0b1_00-0B10_1+0o70_2-0O2+0xFaB4/0XFF_A_D+1_0.34_1+0xF0A-1.0_0j");
+        let mut lexer = Lexer::new("100-1_0_0_234-1.1--5.2+.6++.5*83.2_02-1j/3+5J-10_0j+0b1_00-0B10_1+0o70_2-0O2+0xFaB4/0XFF_A_D+1_0.34_1+0xF0A-1.0_0j-87.7e100+12E4-1E-100-01e+100");
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("100"));
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("1_0_0_234"));
@@ -402,6 +411,14 @@ mod tests {
             lexer.next().unwrap().unwrap(),
             Token::Complex("0xF0A-1.0_0j")
         );
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("87.7e100"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("12E4"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("1E-100"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("01e+100"));
         assert!(lexer.next().is_none());
         // TODO: tests that non-decimal numbers in real portion of complex number are OK, but not in
         // complex part. Tests for underscores in floats.
