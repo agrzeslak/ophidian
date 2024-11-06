@@ -62,16 +62,19 @@ impl<'a> Lexer<'a> {
                 recognize(alt((
                     preceded(
                         tag_no_case("0b"),
-                        pair(digit1, many0(pair(opt(char('_')), is_a("01")))),
+                        pair(is_a("01"), many0(pair(opt(char('_')), is_a("01")))),
                     ),
                     preceded(
                         tag_no_case("0o"),
-                        pair(digit1, many0(pair(opt(char('_')), is_a("01234567")))),
+                        pair(
+                            is_a("01234567"),
+                            many0(pair(opt(char('_')), is_a("01234567"))),
+                        ),
                     ),
                     preceded(
                         tag_no_case("0x"),
                         pair(
-                            digit1,
+                            is_a("0123456789abcdefABCDEF"),
                             many0(pair(opt(char('_')), is_a("0123456789abcdefABCDEF"))),
                         ),
                     ),
@@ -360,7 +363,7 @@ mod tests {
 
     #[test]
     fn numbers() {
-        let mut lexer = Lexer::new("100-1_0_0_234-1.1--5.2+.6++.5*83.2_02-1j/3+5J-10_0j+0b1_00-0B10_1+0o70_2-0O2+0xFaB4/0XFF_A_D");
+        let mut lexer = Lexer::new("100-1_0_0_234-1.1--5.2+.6++.5*83.2_02-1j/3+5J-10_0j+0b1_00-0B10_1+0o70_2-0O2+0xFaB4/0XFF_A_D+1_0.34_1+0xF0A-1.0_0j");
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("100"));
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("1_0_0_234"));
@@ -391,7 +394,14 @@ mod tests {
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0xFaB4"));
         assert_eq!(lexer.next().unwrap().unwrap(), Token::Slash);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0xFF_A_D"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0XFF_A_D"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("1_0.34_1"));
+        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
+        assert_eq!(
+            lexer.next().unwrap().unwrap(),
+            Token::Complex("0xF0A-1.0_0j")
+        );
         assert!(lexer.next().is_none());
         // TODO: tests that non-decimal numbers in real portion of complex number are OK, but not in
         // complex part. Tests for underscores in floats.
