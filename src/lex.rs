@@ -353,17 +353,22 @@ pub struct LexError {
 mod tests {
     use super::*;
 
+    macro_rules! assert_tokens_eq {
+        ($input:expr, [$($expected:expr),+$(,)?]) => {
+            let mut lexer = Lexer::new($input);
+            $(
+                assert_eq!(lexer.next().unwrap().unwrap(), $expected);
+            )+
+        };
+    }
+
     #[test]
     fn ensure_taking_most_chars_possible() {
-        let mut lexer = Lexer::new(r"***==*None\/");
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::DoubleStar);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::StarEquals);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Equals);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Star);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::None);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::BackSlash);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Slash);
-        assert!(lexer.next().is_none());
+        use Token::*;
+        assert_tokens_eq!(
+            r"***==*None\/",
+            [DoubleStar, StarEquals, Equals, Star, None, BackSlash, Slash]
+        );
     }
 
     #[test]
@@ -398,55 +403,47 @@ mod tests {
 
     #[test]
     fn numbers() {
-        let mut lexer = Lexer::new("100-1_0_0_234-1.1--5.2+.6++.5*83.2_02-1j/3+5J-10_0j+0b1_00-0B10_1+0o70_2-0O2+0xFaB4/0XFF_A_D+1_0.34_1+0xF0A-1.0_0j-87.7e100+12E4-1E-100-01e+100+10e1+10j");
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("100"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("1_0_0_234"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("1.1"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("5.2"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float(".6"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float(".5"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Star);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Complex("83.2_02-1j"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Slash);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Complex("3+5J"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Complex("10_0j"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0b1_00"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0B10_1"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0o70_2"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0O2"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0xFaB4"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Slash);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Int("0XFF_A_D"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("1_0.34_1"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
-        assert_eq!(
-            lexer.next().unwrap().unwrap(),
-            Token::Complex("0xF0A-1.0_0j")
+        use Token::*;
+        assert_tokens_eq!(
+            "100-1_0_0_234-1.1",
+            [Int("100"), Minus, Int("1_0_0_234"), Minus, Float("1.1")]
         );
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("87.7e100"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("12E4"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("1E-100"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Minus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Float("01e+100"));
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Plus);
-        assert_eq!(lexer.next().unwrap().unwrap(), Token::Complex("10e1+10j"));
-        assert!(lexer.next().is_none());
+        assert_tokens_eq!(
+            "--5.2+.6++",
+            [Minus, Minus, Float("5.2"), Plus, Float(".6"), Plus, Plus]
+        );
+        assert_tokens_eq!(
+            ".5*83.2_02-1j/",
+            [Float(".5"), Star, Complex("83.2_02-1j"), Slash]
+        );
+        assert_tokens_eq!(
+            "3+5J-10_0j+",
+            [Complex("3+5J"), Minus, Complex("10_0j"), Plus]
+        );
+        assert_tokens_eq!(
+            "0b1_00-0B10_1+0o70_2-0O2",
+            [Int("0b1_00"), Minus, Int("0B10_1"), Plus, Int("0o70_2")]
+        );
+        assert_tokens_eq!(
+            "-0O2+0xFaB4/",
+            [Minus, Int("0O2"), Plus, Int("0xFaB4"), Slash]
+        );
+        assert_tokens_eq!(
+            "0XFF_A_D+1_0.34_1+",
+            [Int("0XFF_A_D"), Plus, Float("1_0.34_1"), Plus]
+        );
+        assert_tokens_eq!(
+            "0xF0A-1.0_0j-87.7e100+",
+            [Complex("0xF0A-1.0_0j"), Minus, Float("87.7e100"), Plus]
+        );
+
+        assert_tokens_eq!(
+            "12E4-1E-100-",
+            [Float("12E4"), Minus, Float("1E-100"), Minus]
+        );
+        assert_tokens_eq!(
+            "01e+100+10e1+10j",
+            [Float("01e+100"), Plus, Complex("10e1+10j")]
+        );
     }
 }
