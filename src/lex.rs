@@ -1,9 +1,9 @@
 use miette::{Diagnostic, SourceSpan};
 use nom::{
     branch::alt,
-    bytes::complete::{is_a, tag, tag_no_case, take_until},
-    character::complete::{char, digit1, newline, one_of},
-    combinator::{map, opt, recognize, verify},
+    bytes::complete::{is_a, tag, tag_no_case, take_till, take_until},
+    character::complete::{char, digit1, line_ending, one_of, tab},
+    combinator::{cut, map, opt, recognize, verify},
     multi::many0,
     sequence::{delimited, pair, preceded, tuple},
     IResult,
@@ -112,9 +112,17 @@ impl<'a> Lexer<'a> {
                     tag_no_case("u"),
                 ))),
                 alt((
-                    delimited(char('\''), take_until("\'"), char('\'')),
-                    delimited(char('"'), take_until("\""), char('"')),
-                    delimited(tag("\"\"\""), take_until("\"\"\""), tag("\"\"\"")),
+                    delimited(tag("\"\"\""), cut(take_until("\"\"\"")), tag("\"\"\"")),
+                    delimited(
+                        char('\''),
+                        cut(take_till(|c| matches!(c, '\'' | '\r' | '\n'))),
+                        char('\''),
+                    ),
+                    delimited(
+                        char('"'),
+                        cut(take_till(|c| matches!(c, '"' | '\r' | '\n'))),
+                        char('"'),
+                    ),
                 )),
             )),
             |s| Token::String(s),
@@ -212,7 +220,7 @@ impl<'a> Iterator for Lexer<'a> {
                 map(char('<'), |_| Token::LessThan),
             )),
             alt((
-                map(newline, |_| Token::NewLine),
+                map(line_ending, |_| Token::NewLine),
                 map(char('-'), |_| Token::Minus),
                 map(char('%'), |_| Token::Percent),
                 map(char('+'), |_| Token::Plus),
@@ -222,7 +230,7 @@ impl<'a> Iterator for Lexer<'a> {
                 map(char('/'), |_| Token::Slash),
                 map(char(' '), |_| Token::Space),
                 map(char('*'), |_| Token::Star),
-                map(char('\t'), |_| Token::Tab),
+                map(tab, |_| Token::Tab),
                 map(char('~'), |_| Token::Tilde),
             )),
         ))(self.rest);
@@ -337,7 +345,7 @@ pub enum Token<'a> {
 }
 
 #[derive(Debug, Diagnostic, Error)]
-#[error("unrecognized token on line {line}, column {column}")]
+#[error("error lexing token at line {line}, column {column}")]
 #[diagnostic(code("lexing error"))]
 pub struct LexError {
     #[source_code]
@@ -372,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn lex_error_location() {
+    fn error_location() {
         let mut lexer = Lexer::new("*/foo");
         for _ in 0..2 {
             lexer.next();
@@ -445,5 +453,100 @@ mod tests {
             "01e+100+10e1+10j",
             [Float("01e+100"), Plus, Complex("10e1+10j")]
         );
+    }
+
+    #[test]
+    fn strings() {
+        use Token::*;
+        assert_tokens_eq!("10'foo\"'*", [Int("10"), String("'foo\"'"), Star]);
+        assert_tokens_eq!("10\"foo'\"*", [Int("10"), String("\"foo'\""), Star]);
+        assert_tokens_eq!(
+            "10\"\"\"foo\n\"\"\"*",
+            [Int("10"), String("\"\"\"foo\n\"\"\""), Star]
+        );
+        assert_tokens_eq!(
+            "10\"\"\"foo\r\n\"\"\"*",
+            [Int("10"), String("\"\"\"foo\r\n\"\"\""), Star]
+        );
+        assert_tokens_eq!("10rf'foo{}\"'*", [Int("10"), String("rf'foo{}\"'"), Star]);
+        assert_tokens_eq!(
+            "10fr'foo{a + b}\"'*",
+            [Int("10"), String("fr'foo{a + b}\"'"), Star]
+        );
+        assert_tokens_eq!(
+            "10f'foo{a + b}\"'*",
+            [Int("10"), String("f'foo{a + b}\"'"), Star]
+        );
+        assert_tokens_eq!(
+            "10r'foo{a + b}\"'*",
+            [Int("10"), String("r'foo{a + b}\"'"), Star]
+        );
+        assert_tokens_eq!(
+            "10rb'foo{a + b}\"'*",
+            [Int("10"), String("rb'foo{a + b}\"'"), Star]
+        );
+        assert_tokens_eq!(
+            "10br'foo{a + b}\"'*",
+            [Int("10"), String("br'foo{a + b}\"'"), Star]
+        );
+        assert_tokens_eq!(
+            "10u'foo{a + b}\"'*",
+            [Int("10"), String("u'foo{a + b}\"'"), Star]
+        );
+        let mut lexer = Lexer::new("10'foo\"*");
+        lexer.next();
+        let error = lexer.next().unwrap().unwrap_err();
+        assert_eq!(error.at, SourceSpan::from(2));
+        assert_eq!(error.line, 1);
+        assert_eq!(error.column, 3);
+
+        let mut lexer = Lexer::new("10\"foo'*");
+        lexer.next();
+        let error = lexer.next().unwrap().unwrap_err();
+        assert_eq!(error.at, SourceSpan::from(2));
+        assert_eq!(error.line, 1);
+        assert_eq!(error.column, 3);
+
+        let mut lexer = Lexer::new("10\"\"\"foo\'\'\'*");
+        lexer.next();
+        let error = lexer.next().unwrap().unwrap_err();
+        assert_eq!(error.at, SourceSpan::from(2));
+        assert_eq!(error.line, 1);
+        assert_eq!(error.column, 3);
+
+        let mut lexer = Lexer::new("10\"foo\n\"*");
+        lexer.next();
+        let error = lexer.next().unwrap().unwrap_err();
+        assert_eq!(error.at, SourceSpan::from(2));
+        assert_eq!(error.line, 1);
+        assert_eq!(error.column, 3);
+
+        let mut lexer = Lexer::new("10'foo\n'*");
+        lexer.next();
+        let error = lexer.next().unwrap().unwrap_err();
+        assert_eq!(error.at, SourceSpan::from(2));
+        assert_eq!(error.line, 1);
+        assert_eq!(error.column, 3);
+
+        let mut lexer = Lexer::new("10fu'foo\"*");
+        lexer.next();
+        let error = lexer.next().unwrap().unwrap_err();
+        assert_eq!(error.at, SourceSpan::from(2));
+        assert_eq!(error.line, 1);
+        assert_eq!(error.column, 3);
+
+        let mut lexer = Lexer::new("10uu'foo\"*");
+        lexer.next();
+        let error = lexer.next().unwrap().unwrap_err();
+        assert_eq!(error.at, SourceSpan::from(2));
+        assert_eq!(error.line, 1);
+        assert_eq!(error.column, 3);
+
+        let mut lexer = Lexer::new("10ru'foo\"*");
+        lexer.next();
+        let error = lexer.next().unwrap().unwrap_err();
+        assert_eq!(error.at, SourceSpan::from(2));
+        assert_eq!(error.line, 1);
+        assert_eq!(error.column, 3);
     }
 }
