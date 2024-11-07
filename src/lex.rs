@@ -2,7 +2,7 @@ use miette::{Diagnostic, SourceSpan};
 use nom::{
     branch::alt,
     bytes::complete::{is_a, tag, tag_no_case, take_till, take_until},
-    character::complete::{char, digit1, line_ending, one_of, tab},
+    character::complete::{char, digit1, line_ending, not_line_ending, one_of, tab},
     combinator::{cut, map, opt, recognize, verify},
     multi::many0,
     sequence::{delimited, pair, preceded, tuple},
@@ -97,7 +97,6 @@ impl<'a> Lexer<'a> {
         )(input)
     }
 
-    // TODO: Tests
     fn parse_string(input: &str) -> IResult<&str, Token> {
         map(
             recognize(pair(
@@ -128,12 +127,20 @@ impl<'a> Lexer<'a> {
             |s| Token::String(s),
         )(input)
     }
+
+    fn parse_comment(input: &str) -> IResult<&str, ()> {
+        map(tuple((char('#'), not_line_ending)), |_| ())(input)
+    }
 }
 
 impl<'a> Iterator for Lexer<'a> {
     type Item = Result<Token<'a>, LexError>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        // Skip over comments
+        let (rest, _) = opt(Self::parse_comment)(self.rest).expect("does not need to match");
+        self.rest = rest;
+
         if self.rest.len() == 0 {
             return None;
         }
@@ -548,5 +555,37 @@ mod tests {
         assert_eq!(error.at, SourceSpan::from(2));
         assert_eq!(error.line, 1);
         assert_eq!(error.column, 3);
+    }
+
+    #[test]
+    fn comments() {
+        use Token::*;
+        assert_tokens_eq!(
+            "10*2
+# comment  # nested comment
+# another line of comments
+'foo'  #     another comment
+continue
+#final comment",
+            [
+                Int("10"),
+                Star,
+                Int("2"),
+                NewLine,
+                NewLine,
+                NewLine,
+                String("'foo'"),
+                Space,
+                Space,
+                NewLine,
+                Continue,
+                NewLine,
+            ]
+        );
+
+        let mut lexer = Lexer::new("# comment");
+        assert!(lexer.next().is_none());
+
+        assert_tokens_eq!("# comment\n", [NewLine]);
     }
 }
