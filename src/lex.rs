@@ -112,6 +112,7 @@ impl<'a> Lexer<'a> {
                 ))),
                 alt((
                     delimited(tag("\"\"\""), cut(take_until("\"\"\"")), tag("\"\"\"")),
+                    delimited(tag("'''"), cut(take_until("'''")), tag("'''")),
                     delimited(
                         char('\''),
                         cut(take_till(|c| matches!(c, '\'' | '\r' | '\n'))),
@@ -129,6 +130,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn parse_comment(input: &str) -> IResult<&str, ()> {
+        // TODO: Parse triple-quoted docstrings
         map(tuple((char('#'), not_line_ending)), |_| ())(input)
     }
 }
@@ -475,6 +477,7 @@ mod tests {
             "10\"\"\"foo\r\n\"\"\"*",
             [Int("10"), String("\"\"\"foo\r\n\"\"\""), Star]
         );
+        assert_tokens_eq!("10'''foo\n'''*", [Int("10"), String("'''foo\n'''"), Star]);
         assert_tokens_eq!("10rf'foo{}\"'*", [Int("10"), String("rf'foo{}\"'"), Star]);
         assert_tokens_eq!(
             "10fr'foo{a + b}\"'*",
@@ -485,12 +488,12 @@ mod tests {
             [Int("10"), String("f'foo{a + b}\"'"), Star]
         );
         assert_tokens_eq!(
-            "10r'foo{a + b}\"'*",
-            [Int("10"), String("r'foo{a + b}\"'"), Star]
+            "10r\"foo{a + b}'\"*",
+            [Int("10"), String("r\"foo{a + b}'\""), Star]
         );
         assert_tokens_eq!(
-            "10rb'foo{a + b}\"'*",
-            [Int("10"), String("rb'foo{a + b}\"'"), Star]
+            "10rb'''foo{a + b}\"'''*",
+            [Int("10"), String("rb'''foo{a + b}\"'''"), Star]
         );
         assert_tokens_eq!(
             "10br'foo{a + b}\"'*",
@@ -514,7 +517,14 @@ mod tests {
         assert_eq!(error.line, 1);
         assert_eq!(error.column, 3);
 
-        let mut lexer = Lexer::new("10\"\"\"foo\'\'\'*");
+        let mut lexer = Lexer::new("10\"\"\"foo'''*");
+        lexer.next();
+        let error = lexer.next().unwrap().unwrap_err();
+        assert_eq!(error.at, SourceSpan::from(2));
+        assert_eq!(error.line, 1);
+        assert_eq!(error.column, 3);
+
+        let mut lexer = Lexer::new("10'''foo\"\"\"*");
         lexer.next();
         let error = lexer.next().unwrap().unwrap_err();
         assert_eq!(error.at, SourceSpan::from(2));
