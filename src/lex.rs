@@ -3,7 +3,7 @@ use nom::{
     branch::alt,
     bytes::complete::{is_a, tag, tag_no_case, take_till, take_until},
     character::complete::{char, digit1, line_ending, not_line_ending, one_of, tab},
-    combinator::{cut, map, opt, recognize, verify},
+    combinator::{cut, eof, map, opt, recognize, verify},
     multi::many0,
     sequence::{delimited, pair, preceded, tuple},
     IResult,
@@ -139,13 +139,12 @@ impl<'a> Iterator for Lexer<'a> {
     type Item = Result<Token<'a>, LexError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // Skip over comments
-        let (rest, _) = opt(Self::parse_comment)(self.rest).expect("does not need to match");
-        self.rest = rest;
-
         if self.rest.len() == 0 {
             return None;
         }
+
+        // Skip over comments
+        let (rest, _) = opt(Self::parse_comment)(self.rest).expect("does not need to match");
 
         // `alt` only supports up to 21 tuple values, hence they have been split up
         let result: nom::IResult<&str, Token, nom::error::Error<&str>> = alt((
@@ -221,14 +220,15 @@ impl<'a> Iterator for Lexer<'a> {
                 map(char(':'), |_| Token::Colon),
                 map(char(','), |_| Token::Comma),
                 map(char('.'), |_| Token::Dot),
+                map(eof, |_| Token::Eof),
                 map(char('='), |_| Token::Equals),
                 map(char('>'), |_| Token::GreaterThan),
                 map(char('{'), |_| Token::LeftBrace),
                 map(char('['), |_| Token::LeftBracket),
                 map(char('('), |_| Token::LeftParen),
-                map(char('<'), |_| Token::LessThan),
             )),
             alt((
+                map(char('<'), |_| Token::LessThan),
                 map(line_ending, |_| Token::NewLine),
                 map(char('-'), |_| Token::Minus),
                 map(char('%'), |_| Token::Percent),
@@ -242,7 +242,7 @@ impl<'a> Iterator for Lexer<'a> {
                 map(tab, |_| Token::Tab),
                 map(char('~'), |_| Token::Tilde),
             )),
-        ))(self.rest);
+        ))(rest);
         match result {
             Ok((rest, token)) => {
                 // Update position based on how much the length of `rest` decreased
@@ -302,6 +302,7 @@ pub enum Token<'a> {
     DoubleStarEquals,
     Elif,
     Else,
+    Eof,
     Equals,
     Except,
     False,
@@ -371,12 +372,40 @@ mod tests {
     use super::*;
 
     macro_rules! assert_tokens_eq {
-        ($input:expr, [$($expected:expr),+$(,)?]) => {
+        ($input:expr, [$($expected:expr),+$(,)?]$(,err { at = $at:expr, line = $line:literal, column = $column:literal })?) => {
             let mut lexer = Lexer::new($input);
             $(
                 assert_eq!(lexer.next().unwrap().unwrap(), $expected);
             )+
+            $(
+                let error = lexer.next().unwrap().unwrap_err();
+                assert_eq!(error.at, SourceSpan::from($at));
+                assert_eq!(error.line, $line);
+                assert_eq!(error.column, $column);
+            )?
         };
+        ($input:expr, err { at = $at:expr, line = $line:literal, column = $column:literal }) => {
+            let mut lexer = Lexer::new($input);
+            while let Some(result) = lexer.next() {
+                match result {
+                    Ok(_) => {},
+                    Err(e) => {
+                        assert_eq!(e.at, SourceSpan::from($at));
+                        assert_eq!(e.line, $line);
+                        assert_eq!(e.column, $column);
+                        return;
+                    },
+                }
+            }
+            panic!("no error was returned");
+        };
+    }
+
+    #[test]
+    fn iterator_ends() {
+        let mut lexer = Lexer::new("10");
+        lexer.next().unwrap().unwrap();
+        assert!(lexer.next().is_none());
     }
 
     #[test]
@@ -390,32 +419,9 @@ mod tests {
 
     #[test]
     fn error_location() {
-        let mut lexer = Lexer::new("*/foo");
-        for _ in 0..2 {
-            lexer.next();
-        }
-        let error = lexer.next().unwrap().unwrap_err();
-        assert_eq!(error.at, SourceSpan::from(2));
-        assert_eq!(error.line, 1);
-        assert_eq!(error.column, 3);
-
-        let mut lexer = Lexer::new("*/\nfoo");
-        for _ in 0..3 {
-            lexer.next();
-        }
-        let error = lexer.next().unwrap().unwrap_err();
-        assert_eq!(error.at, SourceSpan::from(3));
-        assert_eq!(error.line, 2);
-        assert_eq!(error.column, 1);
-
-        let mut lexer = Lexer::new("*/\n*foo");
-        for _ in 0..4 {
-            lexer.next();
-        }
-        let error = lexer.next().unwrap().unwrap_err();
-        assert_eq!(error.at, SourceSpan::from(4));
-        assert_eq!(error.line, 2);
-        assert_eq!(error.column, 2);
+        use Token::*;
+        assert_tokens_eq!("*/foo", [Star, Slash], err { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("*/\nfoo", [Star, Slash, NewLine], err { at = 3, line = 2, column = 1 });
     }
 
     #[test]
@@ -503,68 +509,15 @@ mod tests {
             "10u'foo{a + b}\"'*",
             [Int("10"), String("u'foo{a + b}\"'"), Star]
         );
-        let mut lexer = Lexer::new("10'foo\"*");
-        lexer.next();
-        let error = lexer.next().unwrap().unwrap_err();
-        assert_eq!(error.at, SourceSpan::from(2));
-        assert_eq!(error.line, 1);
-        assert_eq!(error.column, 3);
-
-        let mut lexer = Lexer::new("10\"foo'*");
-        lexer.next();
-        let error = lexer.next().unwrap().unwrap_err();
-        assert_eq!(error.at, SourceSpan::from(2));
-        assert_eq!(error.line, 1);
-        assert_eq!(error.column, 3);
-
-        let mut lexer = Lexer::new("10\"\"\"foo'''*");
-        lexer.next();
-        let error = lexer.next().unwrap().unwrap_err();
-        assert_eq!(error.at, SourceSpan::from(2));
-        assert_eq!(error.line, 1);
-        assert_eq!(error.column, 3);
-
-        let mut lexer = Lexer::new("10'''foo\"\"\"*");
-        lexer.next();
-        let error = lexer.next().unwrap().unwrap_err();
-        assert_eq!(error.at, SourceSpan::from(2));
-        assert_eq!(error.line, 1);
-        assert_eq!(error.column, 3);
-
-        let mut lexer = Lexer::new("10\"foo\n\"*");
-        lexer.next();
-        let error = lexer.next().unwrap().unwrap_err();
-        assert_eq!(error.at, SourceSpan::from(2));
-        assert_eq!(error.line, 1);
-        assert_eq!(error.column, 3);
-
-        let mut lexer = Lexer::new("10'foo\n'*");
-        lexer.next();
-        let error = lexer.next().unwrap().unwrap_err();
-        assert_eq!(error.at, SourceSpan::from(2));
-        assert_eq!(error.line, 1);
-        assert_eq!(error.column, 3);
-
-        let mut lexer = Lexer::new("10fu'foo\"*");
-        lexer.next();
-        let error = lexer.next().unwrap().unwrap_err();
-        assert_eq!(error.at, SourceSpan::from(2));
-        assert_eq!(error.line, 1);
-        assert_eq!(error.column, 3);
-
-        let mut lexer = Lexer::new("10uu'foo\"*");
-        lexer.next();
-        let error = lexer.next().unwrap().unwrap_err();
-        assert_eq!(error.at, SourceSpan::from(2));
-        assert_eq!(error.line, 1);
-        assert_eq!(error.column, 3);
-
-        let mut lexer = Lexer::new("10ru'foo\"*");
-        lexer.next();
-        let error = lexer.next().unwrap().unwrap_err();
-        assert_eq!(error.at, SourceSpan::from(2));
-        assert_eq!(error.line, 1);
-        assert_eq!(error.column, 3);
+        assert_tokens_eq!("10'foo\"*", err { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("10\"foo'*", err { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("10\"\"\"foo'''*", err { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("10'''foo\"\"\"*", err { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("10\"foo\n\"*", err { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("10'foo\n'*", err { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("10fu'foo\"*", err { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("10uu'foo\"*", err { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("10ru'foo\"*", err { at = 2, line = 1, column = 3 });
     }
 
     #[test]
@@ -593,9 +546,8 @@ continue
             ]
         );
 
-        let mut lexer = Lexer::new("# comment");
-        assert!(lexer.next().is_none());
-
+        assert_tokens_eq!("# comment", [Eof]);
         assert_tokens_eq!("# comment\n", [NewLine]);
+        assert_tokens_eq!("# comment\n'foo*", err { at = 10, line = 2, column = 1 });
     }
 }
