@@ -1,8 +1,10 @@
 use miette::{Diagnostic, SourceSpan};
 use nom::{
     branch::alt,
-    bytes::complete::{is_a, tag, tag_no_case, take_till, take_until},
-    character::complete::{char, digit1, line_ending, not_line_ending, one_of, tab},
+    bytes::complete::{is_a, tag, tag_no_case, take_till, take_until, take_while},
+    character::complete::{
+        alpha1, alphanumeric1, char, digit1, line_ending, not_line_ending, one_of, tab,
+    },
     combinator::{cut, eof, map, opt, recognize, verify},
     multi::many0,
     sequence::{delimited, pair, preceded, tuple},
@@ -133,6 +135,16 @@ impl<'a> Lexer<'a> {
         // TODO: Parse triple-quoted docstrings
         map(tuple((char('#'), not_line_ending)), |_| ())(input)
     }
+
+    fn parse_identifier(input: &str) -> IResult<&str, Token> {
+        map(
+            recognize(pair(
+                alt((tag("_"), alpha1)),
+                opt(take_while(|c: char| c.is_alphanumeric() || c == '_')),
+            )),
+            |s| Token::Identifier(s),
+        )(input)
+    }
 }
 
 impl<'a> Iterator for Lexer<'a> {
@@ -242,6 +254,7 @@ impl<'a> Iterator for Lexer<'a> {
                 map(tab, |_| Token::Tab),
                 map(char('~'), |_| Token::Tilde),
             )),
+            Self::parse_identifier,
         ))(rest);
         match result {
             Ok((rest, token)) => {
@@ -312,6 +325,7 @@ pub enum Token<'a> {
     From,
     Global,
     GreaterThan,
+    Identifier(&'a str),
     If,
     Import,
     In,
@@ -397,7 +411,7 @@ mod tests {
                     },
                 }
             }
-            panic!("no error was returned");
+            panic!("expected error, but none was returned");
         };
     }
 
@@ -420,8 +434,7 @@ mod tests {
     #[test]
     fn error_location() {
         use Token::*;
-        assert_tokens_eq!("*/foo", [Star, Slash], err { at = 2, line = 1, column = 3 });
-        assert_tokens_eq!("*/\nfoo", [Star, Slash, NewLine], err { at = 3, line = 2, column = 1 });
+        assert_tokens_eq!("*/'foo", [Star, Slash], err { at = 2, line = 1, column = 3 });
     }
 
     #[test]
@@ -549,5 +562,56 @@ continue
         assert_tokens_eq!("# comment", [Eof]);
         assert_tokens_eq!("# comment\n", [NewLine]);
         assert_tokens_eq!("# comment\n'foo*", err { at = 10, line = 2, column = 1 });
+    }
+
+    #[test]
+    fn identifiers() {
+        use Token::*;
+        assert_tokens_eq!(
+            "a = b",
+            [Identifier("a"), Space, Equals, Space, Identifier("b")]
+        );
+        assert_tokens_eq!(" A='foo'", [Space, Identifier("A"), Equals, String("'foo'")]);
+        assert_tokens_eq!(
+            "AbCd1_23 = 2",
+            [Identifier("AbCd1_23"), Space, Equals, Space, Int("2")]
+        );
+        assert_tokens_eq!(
+            "class Foo:\n\tA = 100",
+            [
+                Class,
+                Space,
+                Identifier("Foo"),
+                Colon,
+                NewLine,
+                Tab,
+                Identifier("A"),
+                Space,
+                Equals,
+                Space,
+                Int("100")
+            ]
+        );
+        assert_tokens_eq!(
+            "class Foo:\n\tA = 100",
+            [
+                Class,
+                Space,
+                Identifier("Foo"),
+                Colon,
+                NewLine,
+                Tab,
+                Identifier("A"),
+                Space,
+                Equals,
+                Space,
+                Int("100")
+            ]
+        );
+        assert_tokens_eq!("__init__", [Identifier("__init__")]);
+        // TODO: re-enable when Lexing is fixed such that spaces are not tokens, but instead we
+        //       enforce there to be spaces between tokens. This should be an error, but currently
+        //       isn't (as is the case for many other test cases).
+        // assert_tokens_eq!("0foo", err { at = 0, line = 1, column = 2 });
     }
 }
