@@ -195,7 +195,7 @@ impl<'a> Iterator for Lexer<'a> {
         // TODO: When encountering '\', the indentation we have seen until it is the indentation for
         //       the next line
         // TODO: Tests for indentation
-        dbg!(rest);
+        dbg!(self.rest);
         if self.token_buffer.len() > 0 {
             return Some(Ok(self.token_buffer.pop_front().expect("cannot be empty")));
         }
@@ -248,14 +248,14 @@ impl<'a> Iterator for Lexer<'a> {
         }
 
         // Some tokens need to be separated by whitespace, or be at the start of a new line.
-        let preceding_space_parser = if self.new_line { space0 } else { space1 };
+        let space_if_not_new_line = if self.new_line { space0 } else { space1 };
 
         let result: nom::IResult<&str, Token, nom::error::Error<&str>> = alt((
-            Self::parse_number,
-            Self::parse_string,
+            preceded(space0, Self::parse_number),
+            preceded(space0, Self::parse_string),
             // Keyword
             preceded(
-                preceding_space_parser,
+                space_if_not_new_line,
                 // `alt` only supports up to 21 tuple values, hence they have been split up
                 alt((
                     alt((
@@ -298,58 +298,70 @@ impl<'a> Iterator for Lexer<'a> {
                 )),
             ),
             // Triple char
-            alt((
-                map(tag(">>="), |_| Token::DoubleGreaterThanEquals),
-                map(tag("<<="), |_| Token::DoubleLessThanEquals),
-                map(tag("//="), |_| Token::DoubleSlashEquals),
-                map(tag("**="), |_| Token::DoubleStarEquals),
-            )),
+            preceded(
+                space0,
+                alt((
+                    map(tag(">>="), |_| Token::DoubleGreaterThanEquals),
+                    map(tag("<<="), |_| Token::DoubleLessThanEquals),
+                    map(tag("//="), |_| Token::DoubleSlashEquals),
+                    map(tag("**="), |_| Token::DoubleStarEquals),
+                )),
+            ),
             // Double char
-            alt((
-                map(tag("&="), |_| Token::AmpersandEquals),
-                map(tag("|="), |_| Token::BarEquals),
-                map(tag("^|"), |_| Token::CaratEquals),
-                map(tag(":="), |_| Token::ColonEquals),
-                map(tag(">>"), |_| Token::DoubleGreaterThan),
-                map(tag("<<"), |_| Token::DoubleLessThan),
-                map(tag("//"), |_| Token::DoubleSlash),
-                map(tag("**"), |_| Token::DoubleStar),
-                map(tag("-="), |_| Token::MinusEquals),
-                map(tag("%="), |_| Token::PercentEquals),
-                map(tag("+="), |_| Token::PlusEquals),
-                map(tag("/="), |_| Token::SlashEquals),
-                map(tag("*="), |_| Token::StarEquals),
-            )),
+            preceded(
+                space0,
+                alt((
+                    map(tag("&="), |_| Token::AmpersandEquals),
+                    map(tag("|="), |_| Token::BarEquals),
+                    map(tag("^|"), |_| Token::CaratEquals),
+                    map(tag(":="), |_| Token::ColonEquals),
+                    map(tag(">>"), |_| Token::DoubleGreaterThan),
+                    map(tag("<<"), |_| Token::DoubleLessThan),
+                    map(tag("//"), |_| Token::DoubleSlash),
+                    map(tag("**"), |_| Token::DoubleStar),
+                    map(tag("-="), |_| Token::MinusEquals),
+                    map(tag("%="), |_| Token::PercentEquals),
+                    map(tag("+="), |_| Token::PlusEquals),
+                    map(tag("/="), |_| Token::SlashEquals),
+                    map(tag("*="), |_| Token::StarEquals),
+                )),
+            ),
             // Single char
-            alt((
-                map(char('&'), |_| Token::Ampersand),
-                map(char('\\'), |_| Token::BackSlash),
-                map(char('|'), |_| Token::Bar),
-                map(char('^'), |_| Token::Carat),
-                map(char(':'), |_| Token::Colon),
-                map(char(','), |_| Token::Comma),
-                map(char('.'), |_| Token::Dot),
-                map(eof, |_| Token::Eof),
-                map(char('='), |_| Token::Equals),
-                map(char('>'), |_| Token::GreaterThan),
-                map(char('{'), |_| Token::LeftBrace),
-                map(char('['), |_| Token::LeftBracket),
-                map(char('('), |_| Token::LeftParen),
-            )),
-            alt((
-                map(char('<'), |_| Token::LessThan),
-                map(line_ending, |_| Token::NewLine),
-                map(char('-'), |_| Token::Minus),
-                map(char('%'), |_| Token::Percent),
-                map(char('+'), |_| Token::Plus),
-                map(char('}'), |_| Token::RightBrace),
-                map(char(']'), |_| Token::RightBracket),
-                map(char(')'), |_| Token::RightParen),
-                map(char('/'), |_| Token::Slash),
-                map(char('*'), |_| Token::Star),
-                map(char('~'), |_| Token::Tilde),
-            )),
-            preceded(preceding_space_parser, Self::parse_identifier),
+            preceded(
+                space0,
+                alt((
+                    map(char('&'), |_| Token::Ampersand),
+                    map(char('\\'), |_| Token::BackSlash),
+                    map(char('|'), |_| Token::Bar),
+                    map(char('^'), |_| Token::Carat),
+                    map(char(':'), |_| Token::Colon),
+                    map(char(','), |_| Token::Comma),
+                    map(char('.'), |_| Token::Dot),
+                    map(eof, |_| Token::Eof),
+                    map(char('='), |_| Token::Equals),
+                    map(char('>'), |_| Token::GreaterThan),
+                    map(char('{'), |_| Token::LeftBrace),
+                    map(char('['), |_| Token::LeftBracket),
+                    map(char('('), |_| Token::LeftParen),
+                )),
+            ),
+            preceded(
+                space0,
+                alt((
+                    map(char('<'), |_| Token::LessThan),
+                    map(line_ending, |_| Token::NewLine),
+                    map(char('-'), |_| Token::Minus),
+                    map(char('%'), |_| Token::Percent),
+                    map(char('+'), |_| Token::Plus),
+                    map(char('}'), |_| Token::RightBrace),
+                    map(char(']'), |_| Token::RightBracket),
+                    map(char(')'), |_| Token::RightParen),
+                    map(char('/'), |_| Token::Slash),
+                    map(char('*'), |_| Token::Star),
+                    map(char('~'), |_| Token::Tilde),
+                )),
+            ),
+            preceded(space_if_not_new_line, Self::parse_identifier),
         ))(rest);
         match result {
             Ok((rest, token)) => {
@@ -675,7 +687,7 @@ continue
     fn identifiers() {
         use Token::*;
         assert_tokens_eq!("a = b", [Identifier("a"), Equals, Identifier("b")]);
-        assert_tokens_eq!(" A='foo'", [Identifier("A"), Equals, String("'foo'")]);
+        assert_tokens_eq!(" A='foo'", [Indent, Identifier("A"), Equals, String("'foo'")]);
         assert_tokens_eq!("AbCd1_23 = 2", [Identifier("AbCd1_23"), Equals, Int("2")]);
         assert_tokens_eq!(
             "class Foo:\n\tA = 100",
@@ -684,18 +696,7 @@ continue
                 Identifier("Foo"),
                 Colon,
                 NewLine,
-                Identifier("A"),
-                Equals,
-                Int("100")
-            ]
-        );
-        assert_tokens_eq!(
-            "class Foo:\n\tA = 100",
-            [
-                Class,
-                Identifier("Foo"),
-                Colon,
-                NewLine,
+                Indent,
                 Identifier("A"),
                 Equals,
                 Int("100")
