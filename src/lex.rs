@@ -212,6 +212,7 @@ impl<'a> Iterator for Lexer<'a> {
         // Parse indentation. This is only done if we are on a new line, otherwise whitespace when
         // parsing partially through a line will be treated as indentation.
         if self.new_line {
+            let position_before_parsing = self.whole.len() - self.rest.len();
             self.parsed_indentation = true;
             self.new_line = false;
             let (rest, current_indent) =
@@ -236,7 +237,18 @@ impl<'a> Iterator for Lexer<'a> {
                         // The indentation results in the same column, but with a different mix of
                         // tabs and spaces
                         if indent != current_indent {
-                            todo!("throw mixed tab/space indentation error");
+                            // We use the position before parsing since that will be the beginning
+                            // of the indentation that has caused the error
+                            let at = position_before_parsing;
+                            let line = self.whole[0..=at].lines().count();
+                            let column =
+                                at - self.whole[..at].rfind('\n').map(|i| i + 1).unwrap_or(0) + 1;
+                            return Some(Err(LexError::TabError {
+                                src: self.whole.to_owned(),
+                                at: at.into(),
+                                line,
+                                column,
+                            }));
                         }
                         break;
                     }
@@ -382,7 +394,7 @@ impl<'a> Iterator for Lexer<'a> {
                 let at = self.whole.len() - self.rest.len();
                 let line = self.whole[0..=at].lines().count();
                 let column = at - self.whole[..at].rfind('\n').map(|i| i + 1).unwrap_or(0) + 1;
-                Some(Err(LexError {
+                Some(Err(LexError::InvalidSyntax {
                     src: self.whole.to_owned(),
                     at: at.into(),
                     line,
@@ -478,12 +490,6 @@ pub enum Token<'a> {
     Yield,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum IndentChar {
-    Space,
-    Tab,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct IndentationLevel {
     pub(crate) column: u8,
@@ -492,16 +498,29 @@ struct IndentationLevel {
 }
 
 #[derive(Debug, Diagnostic, Error)]
-#[error("error lexing token at line {line}, column {column}")]
-#[diagnostic(code("lexing error"))]
-pub struct LexError {
-    #[source_code]
-    pub src: String,
+pub enum LexError {
+    #[error("invalid syntax at line {line}, column {column}")]
+    InvalidSyntax {
+        #[source_code]
+        src: String,
 
-    #[label("here")]
-    pub at: SourceSpan,
-    pub line: usize,
-    pub column: usize,
+        #[label("here")]
+        at: SourceSpan,
+
+        line: usize,
+        column: usize,
+    },
+    #[error("inconsistent use of tabs and spaces in indentation at line {line}, column {column}")]
+    TabError {
+        #[source_code]
+        src: String,
+
+        #[label("here")]
+        at: SourceSpan,
+
+        line: usize,
+        column: usize,
+    },
 }
 
 #[cfg(test)]
@@ -509,29 +528,51 @@ mod tests {
     use super::*;
 
     macro_rules! assert_tokens_eq {
-        ($input:expr, [$($expected:expr),+$(,)?]$(,err { at = $at:expr, line = $line:literal, column = $column:literal })?) => {
+        // Assert the correct tokens are returned
+        ($input:expr, [$($expected:expr),+$(,)?]) => {
+            let mut lexer = Lexer::new($input);
+            $(
+                assert_eq!(lexer.next().unwrap().unwrap(), $expected);
+            )+
+        };
+
+        // Assert the correct tokens and error are returned
+        ($input:expr, [$($expected:expr),+$(,)?]$(,$error:path { at = $at:expr, line = $line:literal, column = $column:literal })?) => {
             let mut lexer = Lexer::new($input);
             $(
                 assert_eq!(lexer.next().unwrap().unwrap(), $expected);
             )+
             $(
-                let error = lexer.next().unwrap().unwrap_err();
-                assert_eq!(error.at, SourceSpan::from($at));
-                assert_eq!(error.line, $line);
-                assert_eq!(error.column, $column);
+                match lexer.next().unwrap() {
+                    Ok(_) => { panic!("expected error, but none was returned")}
+                    Err($error {src: _, at, line, column }) => {
+                        assert_eq!(at, SourceSpan::from($at));
+                        assert_eq!(line, $line);
+                        assert_eq!(column, $column);
+                        return;
+                    },
+                    Err(e) => {
+                        panic!("Expected error of type {}, but received {e:?}", stringify!($error));
+                    }
+                }
             )?
         };
-        ($input:expr, err { at = $at:expr, line = $line:literal, column = $column:literal }) => {
+
+        // Ignore returned tokens, just assert that the correct error is eventually returned
+        ($input:expr, $error:path { at = $at:expr, line = $line:literal, column = $column:literal }) => {
             let mut lexer = Lexer::new($input);
             while let Some(result) = lexer.next() {
                 match result {
                     Ok(_) => {},
-                    Err(e) => {
-                        assert_eq!(e.at, SourceSpan::from($at));
-                        assert_eq!(e.line, $line);
-                        assert_eq!(e.column, $column);
+                    Err($error {src: _, at, line, column }) => {
+                        assert_eq!(at, SourceSpan::from($at));
+                        assert_eq!(line, $line);
+                        assert_eq!(column, $column);
                         return;
                     },
+                    Err(e) => {
+                        panic!("Expected error of type {}, but received {e:?}", stringify!($error));
+                    }
                 }
             }
             panic!("expected error, but none was returned");
@@ -557,7 +598,7 @@ mod tests {
     #[test]
     fn error_location() {
         use Token::*;
-        assert_tokens_eq!("*/'foo", [Star, Slash], err { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("*/'foo", [Star, Slash], LexError::InvalidSyntax { at = 2, line = 1, column = 3 });
     }
 
     #[test]
@@ -645,15 +686,15 @@ mod tests {
             "10u'foo{a + b}\"'*",
             [Int("10"), String("u'foo{a + b}\"'"), Star]
         );
-        assert_tokens_eq!("10'foo\"*", err { at = 2, line = 1, column = 3 });
-        assert_tokens_eq!("10\"foo'*", err { at = 2, line = 1, column = 3 });
-        assert_tokens_eq!("10\"\"\"foo'''*", err { at = 2, line = 1, column = 3 });
-        assert_tokens_eq!("10'''foo\"\"\"*", err { at = 2, line = 1, column = 3 });
-        assert_tokens_eq!("10\"foo\n\"*", err { at = 2, line = 1, column = 3 });
-        assert_tokens_eq!("10'foo\n'*", err { at = 2, line = 1, column = 3 });
-        assert_tokens_eq!("10fu'foo\"*", err { at = 2, line = 1, column = 3 });
-        assert_tokens_eq!("10uu'foo\"*", err { at = 2, line = 1, column = 3 });
-        assert_tokens_eq!("10ru'foo\"*", err { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("10'foo\"*", LexError::InvalidSyntax { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("10\"foo'*", LexError::InvalidSyntax { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("10\"\"\"foo'''*", LexError::InvalidSyntax { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("10'''foo\"\"\"*", LexError::InvalidSyntax { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("10\"foo\n\"*", LexError::InvalidSyntax { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("10'foo\n'*", LexError::InvalidSyntax { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("10fu'foo\"*", LexError::InvalidSyntax { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("10uu'foo\"*", LexError::InvalidSyntax { at = 2, line = 1, column = 3 });
+        assert_tokens_eq!("10ru'foo\"*", LexError::InvalidSyntax { at = 2, line = 1, column = 3 });
     }
 
     #[test]
@@ -682,7 +723,7 @@ continue
 
         assert_tokens_eq!("# comment", [Eof]);
         assert_tokens_eq!("# comment\n", [NewLine]);
-        assert_tokens_eq!("# comment\n'foo*", err { at = 10, line = 2, column = 1 });
+        assert_tokens_eq!("# comment\n'foo*", LexError::InvalidSyntax { at = 10, line = 2, column = 1 });
     }
 
     #[test]
@@ -708,7 +749,7 @@ continue
             ]
         );
         assert_tokens_eq!("__init__", [Identifier("__init__")]);
-        assert_tokens_eq!("0foo", err { at = 1, line = 1, column = 2 });
+        assert_tokens_eq!("0foo", LexError::InvalidSyntax { at = 1, line = 1, column = 2 });
     }
 
     #[test]
@@ -764,9 +805,7 @@ continue
                 Int("2"),
             ]
         );
-        // TODO: Enable when this is a mixed tab space error instead of a panic
-        // assert_tokens_eq!("if True:\n \t1\n\t2", err { at = 13, line = 3, column = 1 });
-        // TODO: Throw error if no such indentation can be found when dedenting
-        // assert_tokens_eq!("if True:\n\tif True:\n\t\t\t1\n\t\t2", err { at = 24, line = 3, column = 1});
+        assert_tokens_eq!("if True:\n \t1\n\t2", LexError::TabError { at = 13, line = 3, column = 1 });
+        assert_tokens_eq!("if True:\n\tif True:\n\t\t\t1\n\t\t2", LexError::TabError { at = 24, line = 3, column = 1});
     }
 }
