@@ -17,9 +17,9 @@ static COLUMN_WIDTH: u8 = 8;
 pub struct Lexer<'a> {
     whole: &'a str,
     rest: &'a str,
-    position: usize,
     indent_stack: Vec<IndentationLevel>,
     new_line: bool,
+    parsed_indentation: bool,
     token_buffer: VecDeque<Token<'a>>,
 }
 
@@ -28,9 +28,9 @@ impl<'a> Lexer<'a> {
         Self {
             whole: code,
             rest: code,
-            position: 0,
             indent_stack: Vec::new(),
             new_line: true,
+            parsed_indentation: false,
             token_buffer: VecDeque::new(),
         }
     }
@@ -194,8 +194,6 @@ impl<'a> Iterator for Lexer<'a> {
         // TODO: Ignore newline if there are pending unclosed brackets or line ended with '\'
         // TODO: When encountering '\', the indentation we have seen until it is the indentation for
         //       the next line
-        // TODO: Tests for indentation
-        dbg!(self.rest);
         if self.token_buffer.len() > 0 {
             return Some(Ok(self.token_buffer.pop_front().expect("cannot be empty")));
         }
@@ -204,19 +202,25 @@ impl<'a> Iterator for Lexer<'a> {
             return None;
         }
 
-        let (rest, _) = opt(Self::parse_empty_line)(self.rest).expect("does not need to match");
-        let (mut rest, _) = opt(Self::parse_comment)(rest).expect("does not need to match");
+        self.rest = opt(Self::parse_empty_line)(self.rest)
+            .expect("does not need to match")
+            .0;
+        self.rest = opt(Self::parse_comment)(self.rest)
+            .expect("does not need to match")
+            .0;
 
         // Parse indentation. This is only done if we are on a new line, otherwise whitespace when
         // parsing partially through a line will be treated as indentation.
         if self.new_line {
-            let (new_rest, current_indent) =
-                Self::parse_indent(rest).expect("does not need to match");
-            rest = new_rest;
+            self.parsed_indentation = true;
+            self.new_line = false;
+            let (rest, current_indent) =
+                Self::parse_indent(self.rest).expect("does not need to match");
+            self.rest = rest;
 
             if current_indent.column == 0 {
                 // No indentation
-                for _ in 0..self.indent_stack.len() {
+                while let Some(_) = self.indent_stack.pop() {
                     self.token_buffer.push_back(Token::Dedent);
                 }
             } else if self.indent_stack.len() == 0
@@ -248,14 +252,18 @@ impl<'a> Iterator for Lexer<'a> {
         }
 
         // Some tokens need to be separated by whitespace, or be at the start of a new line.
-        let space_if_not_new_line = if self.new_line { space0 } else { space1 };
+        let ensure_separation = if self.new_line || self.parsed_indentation {
+            space0
+        } else {
+            space1
+        };
 
         let result: nom::IResult<&str, Token, nom::error::Error<&str>> = alt((
             preceded(space0, Self::parse_number),
             preceded(space0, Self::parse_string),
             // Keyword
             preceded(
-                space_if_not_new_line,
+                ensure_separation,
                 // `alt` only supports up to 21 tuple values, hence they have been split up
                 alt((
                     alt((
@@ -361,25 +369,19 @@ impl<'a> Iterator for Lexer<'a> {
                     map(char('~'), |_| Token::Tilde),
                 )),
             ),
-            preceded(space_if_not_new_line, Self::parse_identifier),
-        ))(rest);
+            preceded(ensure_separation, Self::parse_identifier),
+        ))(self.rest);
+        self.parsed_indentation = false;
         match result {
             Ok((rest, token)) => {
-                // Update position based on how much the length of `rest` decreased
-                self.position += self.rest.len() - rest.len();
                 self.rest = rest;
                 self.new_line = token == Token::NewLine;
                 Some(Ok(token))
             }
             Err(_) => {
-                let at = self.position;
-                let line = self.whole[0..=self.position].lines().count();
-                let column = at
-                    - self.whole[..self.position]
-                        .rfind('\n')
-                        .map(|i| i + 1)
-                        .unwrap_or(0)
-                    + 1;
+                let at = self.whole.len() - self.rest.len();
+                let line = self.whole[0..=at].lines().count();
+                let column = at - self.whole[..at].rfind('\n').map(|i| i + 1).unwrap_or(0) + 1;
                 Some(Err(LexError {
                     src: self.whole.to_owned(),
                     at: at.into(),
@@ -687,7 +689,10 @@ continue
     fn identifiers() {
         use Token::*;
         assert_tokens_eq!("a = b", [Identifier("a"), Equals, Identifier("b")]);
-        assert_tokens_eq!(" A='foo'", [Indent, Identifier("A"), Equals, String("'foo'")]);
+        assert_tokens_eq!(
+            " A='foo'",
+            [Indent, Identifier("A"), Equals, String("'foo'")]
+        );
         assert_tokens_eq!("AbCd1_23 = 2", [Identifier("AbCd1_23"), Equals, Int("2")]);
         assert_tokens_eq!(
             "class Foo:\n\tA = 100",
@@ -703,9 +708,65 @@ continue
             ]
         );
         assert_tokens_eq!("__init__", [Identifier("__init__")]);
-        // TODO: re-enable when Lexing is fixed such that spaces are not tokens, but instead we
-        //       enforce there to be spaces between tokens. This should be an error, but currently
-        //       isn't (as is the case for many other test cases).
-        // assert_tokens_eq!("0foo", err { at = 0, line = 1, column = 2 });
+        assert_tokens_eq!("0foo", err { at = 1, line = 1, column = 2 });
+    }
+
+    #[test]
+    fn indentation() {
+        use Token::*;
+        assert_tokens_eq!(" a", [Indent, Identifier("a")]);
+        assert_tokens_eq!(
+            "if True:\n\t1\n2",
+            [
+                If,
+                True,
+                Colon,
+                NewLine,
+                Indent,
+                Int("1"),
+                NewLine,
+                Dedent,
+                Int("2")
+            ]
+        );
+        assert_tokens_eq!(
+            "if True:\n\t1\nif True:\n \t2",
+            [
+                If,
+                True,
+                Colon,
+                NewLine,
+                Indent,
+                Int("1"),
+                NewLine,
+                Dedent,
+                If,
+                True,
+                Colon,
+                NewLine,
+                Indent,
+                Int("2")
+            ]
+        );
+        assert_tokens_eq!(
+            "if True:\n\tif True:\n\t\t\t2",
+            [
+                If,
+                True,
+                Colon,
+                NewLine,
+                Indent,
+                If,
+                True,
+                Colon,
+                NewLine,
+                Indent,
+                Int("2"),
+            ]
+        );
+        // TODO: Enable when this is a mixed tab space error instead of a panic
+        // assert_tokens_eq!("if True:\n \t1\n\t2", err { at = 13, line = 3, column = 1 });
+        // TODO: Throw error if no such indentation can be found when dedenting
+        // assert_tokens_eq!("if True:\n\tif True:\n\t\t\t1\n\t\t2", err { at = 24, line = 3, column = 1});
     }
 }
