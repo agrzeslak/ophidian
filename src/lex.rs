@@ -1,3 +1,4 @@
+#![warn(clippy::all)]
 use miette::{Diagnostic, SourceSpan};
 use nom::{
     branch::alt,
@@ -139,8 +140,19 @@ impl<'a> Lexer<'a> {
     }
 
     fn parse_comment(input: &str) -> IResult<&str, ()> {
-        // TODO: Parse triple-quoted docstrings
+        alt((
+            Self::parse_single_line_comment,
+            // TODO
+            // Self::parse_multi_line_comment,
+        ))(input)
+    }
+
+    fn parse_single_line_comment(input: &str) -> IResult<&str, ()> {
         map(tuple((space0, char('#'), take_till(|c| c == '\n'))), |_| ())(input)
+    }
+
+    fn parse_multi_line_comment(input: &str) -> IResult<&str, ()> {
+        todo!()
     }
 
     fn parse_identifier(input: &str) -> IResult<&str, Token> {
@@ -185,6 +197,154 @@ impl<'a> Lexer<'a> {
     fn parse_empty_line(input: &str) -> IResult<&str, ()> {
         map(pair(space0, peek(newline)), |_| ())(input)
     }
+
+    fn parse_keyword(input: &str) -> IResult<&str, Token> {
+        alt((
+            alt((
+                map(tag("and"), |_| Token::And),
+                map(tag("as"), |_| Token::As),
+                map(tag("assert"), |_| Token::Assert),
+                map(tag("break"), |_| Token::Break),
+                map(tag("class"), |_| Token::Class),
+                map(tag("continue"), |_| Token::Continue),
+                map(tag("def"), |_| Token::Def),
+                map(tag("del"), |_| Token::Del),
+                map(tag("elif"), |_| Token::Elif),
+                map(tag("else"), |_| Token::Else),
+                map(tag("except"), |_| Token::Except),
+                map(tag("false"), |_| Token::False),
+                map(tag("finally"), |_| Token::Finally),
+                map(tag("for"), |_| Token::For),
+                map(tag("from"), |_| Token::From),
+                map(tag("global"), |_| Token::Global),
+                map(tag("if"), |_| Token::If),
+            )),
+            alt((
+                map(tag("import"), |_| Token::Import),
+                map(tag("in"), |_| Token::In),
+                map(tag("is"), |_| Token::Is),
+                map(tag("lambda"), |_| Token::Lambda),
+                map(tag("None"), |_| Token::None),
+                map(tag("nonlocal"), |_| Token::Nonlocal),
+                map(tag("not"), |_| Token::Not),
+                map(tag("or"), |_| Token::Or),
+                map(tag("pass"), |_| Token::Pass),
+                map(tag("raise"), |_| Token::Raise),
+                map(tag("return"), |_| Token::Return),
+                map(tag("True"), |_| Token::True),
+                map(tag("try"), |_| Token::Try),
+                map(tag("while"), |_| Token::While),
+                map(tag("with"), |_| Token::With),
+                map(tag("yield"), |_| Token::Yield),
+            )),
+        ))(input)
+    }
+
+    fn parse_operator(input: &str) -> IResult<&str, Token> {
+        alt((
+            // Triple char
+            alt((
+                map(tag(">>="), |_| Token::DoubleGreaterThanEquals),
+                map(tag("<<="), |_| Token::DoubleLessThanEquals),
+                map(tag("//="), |_| Token::DoubleSlashEquals),
+                map(tag("**="), |_| Token::DoubleStarEquals),
+            )),
+            // Double char
+            alt((
+                map(tag("&="), |_| Token::AmpersandEquals),
+                map(tag("|="), |_| Token::BarEquals),
+                map(tag("^="), |_| Token::CaratEquals),
+                map(tag(":="), |_| Token::ColonEquals),
+                map(tag(">>"), |_| Token::DoubleGreaterThan),
+                map(tag("<<"), |_| Token::DoubleLessThan),
+                map(tag("//"), |_| Token::DoubleSlash),
+                map(tag("**"), |_| Token::DoubleStar),
+                map(tag("-="), |_| Token::MinusEquals),
+                map(tag("%="), |_| Token::PercentEquals),
+                map(tag("+="), |_| Token::PlusEquals),
+                map(tag("/="), |_| Token::SlashEquals),
+                map(tag("*="), |_| Token::StarEquals),
+            )),
+            // Single char
+            alt((
+                map(char('&'), |_| Token::Ampersand),
+                map(char('\\'), |_| Token::BackSlash),
+                map(char('|'), |_| Token::Bar),
+                map(char('^'), |_| Token::Carat),
+                map(char(':'), |_| Token::Colon),
+                map(char(','), |_| Token::Comma),
+                map(char('.'), |_| Token::Dot),
+                map(eof, |_| Token::Eof),
+                map(char('='), |_| Token::Equals),
+                map(char('>'), |_| Token::GreaterThan),
+                map(char('{'), |_| Token::LeftBrace),
+                map(char('['), |_| Token::LeftBracket),
+                map(char('('), |_| Token::LeftParen),
+            )),
+            alt((
+                map(char('<'), |_| Token::LessThan),
+                map(line_ending, |_| Token::NewLine),
+                map(char('-'), |_| Token::Minus),
+                map(char('%'), |_| Token::Percent),
+                map(char('+'), |_| Token::Plus),
+                map(char('}'), |_| Token::RightBrace),
+                map(char(']'), |_| Token::RightBracket),
+                map(char(')'), |_| Token::RightParen),
+                map(char('/'), |_| Token::Slash),
+                map(char('*'), |_| Token::Star),
+                map(char('~'), |_| Token::Tilde),
+            )),
+        ))(input)
+    }
+
+    fn parse_indentation(&mut self) -> Result<(), LexError> {
+        let position_before_parsing = self.whole.len() - self.rest.len();
+        self.parsed_indentation = true;
+        self.new_line = false;
+        let (rest, current_indent) = Self::parse_indent(self.rest).expect("does not need to match");
+        self.rest = rest;
+
+        if current_indent.column == 0 {
+            // No indentation
+            while self.indent_stack.pop().is_some() {
+                self.token_buffer.push_back(Token::Dedent);
+            }
+        } else if self.indent_stack.is_empty()
+            || self.indent_stack.last().expect("cannot be empty").column < current_indent.column
+        {
+            // Deeper indentation
+            self.indent_stack.push(current_indent);
+            self.token_buffer.push_back(Token::Indent);
+        } else {
+            // Shallower indentation
+            while let Some(indent) = self.indent_stack.pop() {
+                if indent.column == current_indent.column {
+                    // The indentation results in the same column, but with a different mix of
+                    // tabs and spaces
+                    if indent != current_indent {
+                        // We use the position before parsing since that will be the beginning
+                        // of the indentation that has caused the error
+                        let at = position_before_parsing;
+                        let line = self.whole[0..=at].lines().count();
+                        let column =
+                            at - self.whole[..at].rfind('\n').map(|i| i + 1).unwrap_or(0) + 1;
+                        return Err(LexError::TabError {
+                            src: self.whole.to_owned(),
+                            at: at.into(),
+                            line,
+                            column,
+                        });
+                    }
+                    break;
+                }
+                self.token_buffer.push_back(Token::Dedent);
+            }
+        }
+
+        // Emit the final generated `Indent`/`Dedent` token, or fall through if none were
+        // generated (same indentation)
+        Ok(())
+    }
 }
 
 impl<'a> Iterator for Lexer<'a> {
@@ -209,180 +369,38 @@ impl<'a> Iterator for Lexer<'a> {
             .expect("does not need to match")
             .0;
 
-        // Parse indentation. This is only done if we are on a new line, otherwise whitespace when
-        // parsing partially through a line will be treated as indentation.
+        // Indentation is only parsed if we are on a newline. Otherwise we may be partially through
+        // a line and consider spaces as indentation.
         if self.new_line {
-            let position_before_parsing = self.whole.len() - self.rest.len();
-            self.parsed_indentation = true;
-            self.new_line = false;
-            let (rest, current_indent) =
-                Self::parse_indent(self.rest).expect("does not need to match");
-            self.rest = rest;
-
-            if current_indent.column == 0 {
-                // No indentation
-                while let Some(_) = self.indent_stack.pop() {
-                    self.token_buffer.push_back(Token::Dedent);
-                }
-            } else if self.indent_stack.len() == 0
-                || self.indent_stack.last().expect("cannot be empty").column < current_indent.column
-            {
-                // Deeper indentation
-                self.indent_stack.push(current_indent);
-                return Some(Ok(Token::Indent));
-            } else {
-                // Shallower indentation
-                while let Some(indent) = self.indent_stack.pop() {
-                    if indent.column == current_indent.column {
-                        // The indentation results in the same column, but with a different mix of
-                        // tabs and spaces
-                        if indent != current_indent {
-                            // We use the position before parsing since that will be the beginning
-                            // of the indentation that has caused the error
-                            let at = position_before_parsing;
-                            let line = self.whole[0..=at].lines().count();
-                            let column =
-                                at - self.whole[..at].rfind('\n').map(|i| i + 1).unwrap_or(0) + 1;
-                            return Some(Err(LexError::TabError {
-                                src: self.whole.to_owned(),
-                                at: at.into(),
-                                line,
-                                column,
-                            }));
-                        }
-                        break;
-                    }
-                    self.token_buffer.push_back(Token::Dedent);
-                }
+            if let Err(e) = self.parse_indentation() {
+                return Some(Err(e));
             }
 
-            // Emit the final generated `Indent`/`Dedent` token, or fall through if none were
-            // generated (same indentation)
+            // Return any `Indent`/`Dedent` tokens pushed into the buffer
+            // FIXME: Ideally `parse_indentation` would just return the token instead of pushing it
+            //        into the buffer, but this causes lifetime issues that are not worth fixing yet.
             if let Some(token) = self.token_buffer.pop_front() {
                 return Some(Ok(token));
             }
         }
 
-        // Some tokens need to be separated by whitespace, or be at the start of a new line.
+        // Some tokens need to be separated by whitespace, or be at the start of a new line
         let ensure_separation = if self.new_line || self.parsed_indentation {
             space0
         } else {
             space1
         };
 
-        let result: nom::IResult<&str, Token, nom::error::Error<&str>> = alt((
+        // Parsers are attempted in the order that ensures less specific tokens (e.g. identifiers)
+        // will not be generated before more specific tokens (e.g. keywords).
+        let result = alt((
             preceded(space0, Self::parse_number),
             preceded(space0, Self::parse_string),
-            // Keyword
-            preceded(
-                ensure_separation,
-                // `alt` only supports up to 21 tuple values, hence they have been split up
-                alt((
-                    alt((
-                        map(tag("and"), |_| Token::And),
-                        map(tag("as"), |_| Token::As),
-                        map(tag("assert"), |_| Token::Assert),
-                        map(tag("break"), |_| Token::Break),
-                        map(tag("class"), |_| Token::Class),
-                        map(tag("continue"), |_| Token::Continue),
-                        map(tag("def"), |_| Token::Def),
-                        map(tag("del"), |_| Token::Del),
-                        map(tag("elif"), |_| Token::Elif),
-                        map(tag("else"), |_| Token::Else),
-                        map(tag("except"), |_| Token::Except),
-                        map(tag("false"), |_| Token::False),
-                        map(tag("finally"), |_| Token::Finally),
-                        map(tag("for"), |_| Token::For),
-                        map(tag("from"), |_| Token::From),
-                        map(tag("global"), |_| Token::Global),
-                        map(tag("if"), |_| Token::If),
-                    )),
-                    alt((
-                        map(tag("import"), |_| Token::Import),
-                        map(tag("in"), |_| Token::In),
-                        map(tag("is"), |_| Token::Is),
-                        map(tag("lambda"), |_| Token::Lambda),
-                        map(tag("None"), |_| Token::None),
-                        map(tag("nonlocal"), |_| Token::Nonlocal),
-                        map(tag("not"), |_| Token::Not),
-                        map(tag("or"), |_| Token::Or),
-                        map(tag("pass"), |_| Token::Pass),
-                        map(tag("raise"), |_| Token::Raise),
-                        map(tag("return"), |_| Token::Return),
-                        map(tag("True"), |_| Token::True),
-                        map(tag("try"), |_| Token::Try),
-                        map(tag("while"), |_| Token::While),
-                        map(tag("with"), |_| Token::With),
-                        map(tag("yield"), |_| Token::Yield),
-                    )),
-                )),
-            ),
-            // Triple char
-            preceded(
-                space0,
-                alt((
-                    map(tag(">>="), |_| Token::DoubleGreaterThanEquals),
-                    map(tag("<<="), |_| Token::DoubleLessThanEquals),
-                    map(tag("//="), |_| Token::DoubleSlashEquals),
-                    map(tag("**="), |_| Token::DoubleStarEquals),
-                )),
-            ),
-            // Double char
-            preceded(
-                space0,
-                alt((
-                    map(tag("&="), |_| Token::AmpersandEquals),
-                    map(tag("|="), |_| Token::BarEquals),
-                    map(tag("^|"), |_| Token::CaratEquals),
-                    map(tag(":="), |_| Token::ColonEquals),
-                    map(tag(">>"), |_| Token::DoubleGreaterThan),
-                    map(tag("<<"), |_| Token::DoubleLessThan),
-                    map(tag("//"), |_| Token::DoubleSlash),
-                    map(tag("**"), |_| Token::DoubleStar),
-                    map(tag("-="), |_| Token::MinusEquals),
-                    map(tag("%="), |_| Token::PercentEquals),
-                    map(tag("+="), |_| Token::PlusEquals),
-                    map(tag("/="), |_| Token::SlashEquals),
-                    map(tag("*="), |_| Token::StarEquals),
-                )),
-            ),
-            // Single char
-            preceded(
-                space0,
-                alt((
-                    map(char('&'), |_| Token::Ampersand),
-                    map(char('\\'), |_| Token::BackSlash),
-                    map(char('|'), |_| Token::Bar),
-                    map(char('^'), |_| Token::Carat),
-                    map(char(':'), |_| Token::Colon),
-                    map(char(','), |_| Token::Comma),
-                    map(char('.'), |_| Token::Dot),
-                    map(eof, |_| Token::Eof),
-                    map(char('='), |_| Token::Equals),
-                    map(char('>'), |_| Token::GreaterThan),
-                    map(char('{'), |_| Token::LeftBrace),
-                    map(char('['), |_| Token::LeftBracket),
-                    map(char('('), |_| Token::LeftParen),
-                )),
-            ),
-            preceded(
-                space0,
-                alt((
-                    map(char('<'), |_| Token::LessThan),
-                    map(line_ending, |_| Token::NewLine),
-                    map(char('-'), |_| Token::Minus),
-                    map(char('%'), |_| Token::Percent),
-                    map(char('+'), |_| Token::Plus),
-                    map(char('}'), |_| Token::RightBrace),
-                    map(char(']'), |_| Token::RightBracket),
-                    map(char(')'), |_| Token::RightParen),
-                    map(char('/'), |_| Token::Slash),
-                    map(char('*'), |_| Token::Star),
-                    map(char('~'), |_| Token::Tilde),
-                )),
-            ),
+            preceded(ensure_separation, Self::parse_keyword),
+            preceded(space0, Self::parse_operator),
             preceded(ensure_separation, Self::parse_identifier),
         ))(self.rest);
+
         self.parsed_indentation = false;
         match result {
             Ok((rest, token)) => {
