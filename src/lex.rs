@@ -1,4 +1,3 @@
-#![warn(clippy::all)]
 use miette::{Diagnostic, SourceSpan};
 use nom::{
     branch::alt,
@@ -49,7 +48,7 @@ impl<'a> Lexer<'a> {
                 )),
                 pair(alt((Self::parse_float, Self::parse_decimal)), one_of("jJ")),
             )),
-            |s| Token::Complex(s),
+            Token::Complex,
         )(input)
     }
     fn parse_float(input: &str) -> IResult<&str, Token> {
@@ -67,7 +66,7 @@ impl<'a> Lexer<'a> {
                 ))),
                 |s: &str| s != "." && (s.contains('.') || s.contains('e') || s.contains('E')),
             ),
-            |s| Token::Float(s),
+            Token::Float,
         )(input)
     }
 
@@ -94,7 +93,7 @@ impl<'a> Lexer<'a> {
                         ),
                     ),
                 ))),
-                |s| Token::Int(s),
+                Token::Int,
             ),
             Self::parse_decimal,
         ))(input)
@@ -103,7 +102,7 @@ impl<'a> Lexer<'a> {
     fn parse_decimal(input: &str) -> IResult<&str, Token> {
         map(
             recognize(pair(digit1, many0(pair(opt(char('_')), digit1)))),
-            |s| Token::Int(s),
+            Token::Int,
         )(input)
     }
 
@@ -135,7 +134,7 @@ impl<'a> Lexer<'a> {
                     ),
                 )),
             )),
-            |s| Token::String(s),
+            Token::String,
         )(input)
     }
 
@@ -161,7 +160,7 @@ impl<'a> Lexer<'a> {
                 alt((tag("_"), alpha1)),
                 opt(take_while(|c: char| c.is_alphanumeric() || c == '_')),
             )),
-            |s| Token::Identifier(s),
+            Token::Identifier,
         )(input)
     }
 
@@ -173,25 +172,21 @@ impl<'a> Lexer<'a> {
     // 3. If the column value is the same as one already on the stack, but the number of
     //    spaces and tabs differs, this is a error.
     fn parse_indent(input: &str) -> IResult<&str, IndentationLevel> {
-        fold_many0(
-            one_of(" \t"),
-            || IndentationLevel::default(),
-            |mut acc, item| {
-                match item {
-                    ' ' => {
-                        acc.spaces += 1;
-                        acc.column += 1;
-                    }
-                    '\t' => {
-                        acc.tabs += 1;
-                        // https://github.com/python/cpython/blob/ce79274e9f093bd06d2285c9af48dbcbc92173de/Parser/lexer/lexer.c#L430
-                        acc.column = (acc.column / COLUMN_WIDTH + 1) * COLUMN_WIDTH;
-                    }
-                    _ => unreachable!(),
+        fold_many0(one_of(" \t"), IndentationLevel::default, |mut acc, item| {
+            match item {
+                ' ' => {
+                    acc.spaces += 1;
+                    acc.column += 1;
                 }
-                acc
-            },
-        )(input)
+                '\t' => {
+                    acc.tabs += 1;
+                    // https://github.com/python/cpython/blob/ce79274e9f093bd06d2285c9af48dbcbc92173de/Parser/lexer/lexer.c#L430
+                    acc.column = (acc.column / COLUMN_WIDTH + 1) * COLUMN_WIDTH;
+                }
+                _ => unreachable!(),
+            }
+            acc
+        })(input)
     }
 
     fn parse_empty_line(input: &str) -> IResult<&str, ()> {
@@ -354,11 +349,11 @@ impl<'a> Iterator for Lexer<'a> {
         // TODO: Ignore newline if there are pending unclosed brackets or line ended with '\'
         // TODO: When encountering '\', the indentation we have seen until it is the indentation for
         //       the next line
-        if self.token_buffer.len() > 0 {
+        if !self.token_buffer.is_empty() {
             return Some(Ok(self.token_buffer.pop_front().expect("cannot be empty")));
         }
 
-        if self.rest.len() == 0 {
+        if self.rest.is_empty() {
             return None;
         }
 
