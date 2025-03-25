@@ -1,16 +1,22 @@
-use crate::{lex::Token, Lexer};
+use crate::lex::Token;
 
-pub struct Parser<'l> {
-    lexer: Lexer<'l>,
+pub struct Parser<'a, I: Iterator<Item = &'a Token<'a>>> {
+    tokens: I,
 }
 
-impl<'l> Parser<'l> {
-    pub fn new(lexer: Lexer<'l>) -> Self {
-        Self { lexer }
+impl<'a, I> Parser<'a, I>
+where
+    I: Iterator<Item = &'a Token<'a>>,
+{
+    pub fn new(tokens: I) -> Self {
+        Self { tokens }
     }
 
     pub fn parse(&mut self) -> TokenTree<'_> {
-        todo!()
+        for token in &mut self.tokens {
+            println!("{token:?}");
+        }
+        panic!()
     }
 
     fn parse_bp(&mut self) -> TokenTree<'_> {
@@ -63,9 +69,9 @@ pub enum Operand {
     Elif, // ?
     Else, // ?
     Equals,
-    Except, // ?
+    Except,  // ?
     Finally, // ?
-    For, // ?
+    For,     // ?
     From,
     Global,
     GreaterThan,
@@ -92,7 +98,7 @@ pub enum Operand {
     Star,
     StarEquals,
     Tilde,
-    Try, // ?
+    Try,   // ?
     While, // ?
     With,
     Yield,
