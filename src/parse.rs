@@ -1,22 +1,21 @@
+use std::iter::Peekable;
+
 use crate::lex::Token;
 
 pub struct Parser<'a, I: Iterator<Item = &'a Token<'a>>> {
-    tokens: I,
+    tokens: Peekable<I>,
 }
 
 impl<'a, I> Parser<'a, I>
 where
     I: Iterator<Item = &'a Token<'a>>,
 {
-    pub fn new(tokens: I) -> Self {
+    pub fn new(tokens: Peekable<I>) -> Self {
         Self { tokens }
     }
 
     pub fn parse(&mut self) -> TokenTree<'_> {
-        for token in &mut self.tokens {
-            println!("{token:?}");
-        }
-        panic!()
+        todo!()
     }
 
     fn parse_bp(&mut self) -> TokenTree<'_> {

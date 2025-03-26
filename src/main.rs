@@ -35,14 +35,8 @@ fn main() -> Result<()> {
                 .into_diagnostic()
                 .wrap_err_with(|| format!("failed to read '{}'", filename.display()))?;
             let lexer = Lexer::new(&file_contents);
-            let mut tokens = Vec::new();
-            for token in lexer {
-                match token {
-                    Ok(token) => tokens.push(token),
-                    Err(e) => return Err(e.into()),
-                }
-            }
-            let mut parser = ophidian::Parser::new(tokens.iter());
+            let tokens = lexer.into_iter().collect::<Result<Vec<Token>, _>>()?;
+            let mut parser = ophidian::Parser::new(tokens.iter().peekable());
             parser.parse();
         }
     }
