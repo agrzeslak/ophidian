@@ -1,6 +1,6 @@
 # Ophidian
 
-A Python lexer, parser and interpreter (_eventually!_), written as a hobby project for educational purposes.
+A Python lexer and parser, written as a hobby project for educational purposes.
 
 User-friendly errors courtesy of [`miette`](https://crates.io/crates/miette).
 
