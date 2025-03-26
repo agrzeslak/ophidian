@@ -125,10 +125,26 @@ fn infix_binding_power(operand: &Operand) -> (u8, u8) {
     }
 }
 
+pub enum Number {
+    Float(f64),
+    Int(isize),
+    Complex {
+        real: Box<Number>,
+        imaginary: Box<Number>,
+    },
+}
+
 pub enum Expression {
     Lambda {
-        arguments: Vec<Expression>,
+        arguments: Vec<String>,
         body: Box<Expression>,
+    },
+    Literal(String),
+    Number(Number),
+    Operand {
+        operand: Operand,
+        lhs: Box<Expression>,
+        rhs: Box<Expression>,
     },
 }
 
@@ -137,7 +153,7 @@ pub enum Statement {
     Break,
     Class {
         name: String,
-        body: Box<Statement>,
+        body: Vec<Statement>,
     },
     Continue,
     Def {
