@@ -144,7 +144,7 @@ pub enum Statement {
         name: String,
         body: Box<Statement>,
     },
-    Del(String),
+    Del(Expression),
     Expression(Expression),
     For {
         init: Expression,
