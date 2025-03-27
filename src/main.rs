@@ -37,7 +37,7 @@ fn main() -> Result<()> {
             let lexer = Lexer::new(&file_contents);
             let tokens = lexer.into_iter().collect::<Result<Vec<Token>, _>>()?;
             let mut parser = ophidian::Parser::new(tokens.iter().peekable());
-            parser.parse();
+            let ast = parser.parse()?;
         }
     }
 

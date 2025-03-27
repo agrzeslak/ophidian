@@ -1,6 +1,8 @@
-use std::iter::Peekable;
+use miette::{Diagnostic, SourceSpan};
+use thiserror::Error;
 
 use crate::lex::Token;
+use std::iter::Peekable;
 
 pub struct Parser<'a, I: Iterator<Item = &'a Token<'a>>> {
     tokens: Peekable<I>,
@@ -14,18 +16,22 @@ where
         Self { tokens }
     }
 
-    pub fn parse(&mut self) -> TokenTree<'_> {
+    pub fn parse(&mut self) -> Result<Option<Ast<'_>>, ParseError> {
         todo!()
     }
 
-    fn parse_bp(&mut self) -> TokenTree<'_> {
+    fn parse_expression(&mut self) -> Result<Option<Ast<'_>>, ParseError> {
+        todo!()
+    }
+
+    fn parse_expression_bp(&mut self) -> Result<Option<Ast<'_>>, ParseError> {
         todo!()
     }
 }
 
-pub enum TokenTree<'a> {
+pub enum Ast<'a> {
     Atom(Atom<'a>),
-    Cons(Operand, Vec<TokenTree<'a>>),
+    Cons(Operand, Vec<Ast<'a>>),
 }
 
 pub enum Atom<'a> {
@@ -178,7 +184,7 @@ pub enum Statement {
         from: Option<Expression>,
         import_as: Option<Expression>,
     },
-    NonLocal(String),
+    Nonlocal(String),
     Pass,
     Raise(Expression),
     Return(Option<Expression>),
@@ -197,4 +203,19 @@ pub enum Statement {
         new_name: Option<String>,
     },
     Yield(Option<Expression>),
+}
+
+#[derive(Debug, Diagnostic, Error)]
+pub enum ParseError {
+    #[error("invalid syntax at line {line}, column {column}")]
+    InvalidSyntax {
+        #[source_code]
+        src: String,
+
+        #[label("here")]
+        at: SourceSpan,
+
+        line: usize,
+        column: usize,
+    },
 }
