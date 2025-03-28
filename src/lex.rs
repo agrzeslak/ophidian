@@ -2,10 +2,12 @@ use miette::{Diagnostic, SourceSpan};
 use nom::{
     branch::alt,
     bytes::complete::{is_a, tag, tag_no_case, take_till, take_until, take_while},
-    character::complete::{alpha1, char, digit1, line_ending, newline, one_of, space0, space1},
-    combinator::{cut, eof, map, opt, peek, recognize, verify},
+    character::complete::{
+        alpha1, char, digit1, line_ending, multispace1, newline, one_of, space0, space1,
+    },
+    combinator::{cond, cut, eof, map, map_opt, opt, peek, recognize, verify},
     multi::{fold_many0, many0},
-    sequence::{delimited, pair, preceded, tuple},
+    sequence::{delimited, pair, preceded, terminated, tuple},
     IResult,
 };
 use std::collections::VecDeque;
@@ -18,9 +20,8 @@ pub struct Lexer<'a> {
     whole: &'a str,
     rest: &'a str,
     indent_stack: Vec<IndentationLevel>,
-    new_line: bool,
-    parsed_indentation: bool,
     token_buffer: VecDeque<Token<'a>>,
+    previous_token: Option<Token<'a>>,
 }
 
 impl<'a> Lexer<'a> {
@@ -29,9 +30,8 @@ impl<'a> Lexer<'a> {
             whole: code,
             rest: code,
             indent_stack: Vec::new(),
-            new_line: true,
-            parsed_indentation: false,
             token_buffer: VecDeque::new(),
+            previous_token: None,
         }
     }
 
@@ -194,45 +194,47 @@ impl<'a> Lexer<'a> {
     }
 
     fn parse_keyword(input: &str) -> IResult<&str, Token> {
-        alt((
+        terminated(
             alt((
-                map(tag("and"), |_| Token::And),
-                map(tag("as"), |_| Token::As),
-                map(tag("assert"), |_| Token::Assert),
-                map(tag("break"), |_| Token::Break),
-                map(tag("class"), |_| Token::Class),
-                map(tag("continue"), |_| Token::Continue),
-                map(tag("def"), |_| Token::Def),
-                map(tag("del"), |_| Token::Del),
-                map(tag("elif"), |_| Token::Elif),
-                map(tag("else"), |_| Token::Else),
-                map(tag("except"), |_| Token::Except),
-                map(tag("false"), |_| Token::False),
-                map(tag("finally"), |_| Token::Finally),
-                map(tag("for"), |_| Token::For),
-                map(tag("from"), |_| Token::From),
-                map(tag("global"), |_| Token::Global),
-                map(tag("if"), |_| Token::If),
+                alt((
+                    map(tag("and"), |_| Token::And),
+                    map(tag("as"), |_| Token::As),
+                    map(tag("assert"), |_| Token::Assert),
+                    map(tag("break"), |_| Token::Break),
+                    map(tag("class"), |_| Token::Class),
+                    map(tag("continue"), |_| Token::Continue),
+                    map(tag("def"), |_| Token::Def),
+                    map(tag("del"), |_| Token::Del),
+                    map(tag("elif"), |_| Token::Elif),
+                    map(tag("else"), |_| Token::Else),
+                    map(tag("except"), |_| Token::Except),
+                    map(tag("false"), |_| Token::False),
+                    map(tag("finally"), |_| Token::Finally),
+                    map(tag("for"), |_| Token::For),
+                    map(tag("from"), |_| Token::From),
+                    map(tag("global"), |_| Token::Global),
+                    map(tag("if"), |_| Token::If),
+                )),
+                alt((
+                    map(tag("import"), |_| Token::Import),
+                    map(tag("in"), |_| Token::In),
+                    map(tag("is"), |_| Token::Is),
+                    map(tag("lambda"), |_| Token::Lambda),
+                    map(tag("nonlocal"), |_| Token::Nonlocal),
+                    map(tag("not"), |_| Token::Not),
+                    map(tag("or"), |_| Token::Or),
+                    map(tag("pass"), |_| Token::Pass),
+                    map(tag("raise"), |_| Token::Raise),
+                    map(tag("return"), |_| Token::Return),
+                    map(tag("True"), |_| Token::True),
+                    map(tag("try"), |_| Token::Try),
+                    map(tag("while"), |_| Token::While),
+                    map(tag("with"), |_| Token::With),
+                    map(tag("yield"), |_| Token::Yield),
+                )),
             )),
-            alt((
-                map(tag("import"), |_| Token::Import),
-                map(tag("in"), |_| Token::In),
-                map(tag("is"), |_| Token::Is),
-                map(tag("lambda"), |_| Token::Lambda),
-                map(tag("None"), |_| Token::None),
-                map(tag("nonlocal"), |_| Token::Nonlocal),
-                map(tag("not"), |_| Token::Not),
-                map(tag("or"), |_| Token::Or),
-                map(tag("pass"), |_| Token::Pass),
-                map(tag("raise"), |_| Token::Raise),
-                map(tag("return"), |_| Token::Return),
-                map(tag("True"), |_| Token::True),
-                map(tag("try"), |_| Token::Try),
-                map(tag("while"), |_| Token::While),
-                map(tag("with"), |_| Token::With),
-                map(tag("yield"), |_| Token::Yield),
-            )),
-        ))(input)
+            peek(alt((multispace1, tag(":")))),
+        )(input)
     }
 
     fn parse_operator(input: &str) -> IResult<&str, Token> {
@@ -247,6 +249,7 @@ impl<'a> Lexer<'a> {
             // Double char
             alt((
                 map(tag("&="), |_| Token::AmpersandEquals),
+                map(tag("->"), |_| Token::Arrow),
                 map(tag("|="), |_| Token::BarEquals),
                 map(tag("^="), |_| Token::CaratEquals),
                 map(tag(":="), |_| Token::ColonEquals),
@@ -297,8 +300,6 @@ impl<'a> Lexer<'a> {
 
     fn parse_indentation(&mut self) -> Result<(), LexError> {
         let position_before_parsing = self.whole.len() - self.rest.len();
-        self.parsed_indentation = true;
-        self.new_line = false;
         let (rest, current_indent) = Self::parse_indent(self.rest).expect("does not need to match");
         self.rest = rest;
 
@@ -352,8 +353,8 @@ impl<'a> Iterator for Lexer<'a> {
         // TODO: Ignore newline if there are pending unclosed brackets or line ended with '\'
         // TODO: When encountering '\', the indentation we have seen until it is the indentation for
         //       the next line
-        if !self.token_buffer.is_empty() {
-            return Some(Ok(self.token_buffer.pop_front().expect("cannot be empty")));
+        if let Some(token) = self.token_buffer.pop_front() {
+            return Some(Ok(token));
         }
 
         if self.rest.is_empty() {
@@ -369,7 +370,7 @@ impl<'a> Iterator for Lexer<'a> {
 
         // Indentation is only parsed if we are on a newline. Otherwise we may be partially through
         // a line and consider spaces as indentation.
-        if self.new_line {
+        if let None | Some(Token::NewLine) = self.previous_token {
             if let Err(e) = self.parse_indentation() {
                 return Some(Err(e));
             }
@@ -378,32 +379,85 @@ impl<'a> Iterator for Lexer<'a> {
             // FIXME: Ideally `parse_indentation` would just return the token instead of pushing it
             //        into the buffer, but this causes lifetime issues that are not worth fixing yet.
             if let Some(token) = self.token_buffer.pop_front() {
+                self.previous_token = Some(token.clone());
                 return Some(Ok(token));
             }
         }
 
-        // Some tokens need to be separated by whitespace, or be at the start of a new line
-        let ensure_separation = if self.new_line || self.parsed_indentation {
-            space0
-        } else {
-            space1
-        };
+        let (rest, _) = space0::<&str, ()>(self.rest).expect("will always match");
+        let ate_space = self.rest.len() != rest.len();
+        self.rest = rest;
+
+        let identifier_allowed = ate_space
+            || match self.previous_token {
+                None => true,
+                Some(
+                    Token::Ampersand
+                    | Token::AmpersandEquals
+                    | Token::Arrow
+                    | Token::Bar
+                    | Token::BarEquals
+                    | Token::Carat
+                    | Token::CaratEquals
+                    | Token::Colon
+                    | Token::ColonEquals
+                    | Token::Comma
+                    | Token::Dedent
+                    | Token::Dot
+                    | Token::DoubleGreaterThan
+                    | Token::DoubleGreaterThanEquals
+                    | Token::DoubleLessThan
+                    | Token::DoubleLessThanEquals
+                    | Token::DoubleSlash
+                    | Token::DoubleSlashEquals
+                    | Token::DoubleStar
+                    | Token::DoubleStarEquals
+                    | Token::Equals
+                    | Token::GreaterThan
+                    | Token::GreaterThanEquals
+                    | Token::Indent
+                    | Token::LeftBrace
+                    | Token::LeftBracket
+                    | Token::LeftParen
+                    | Token::LessThan
+                    | Token::LessThanEquals
+                    | Token::Minus
+                    | Token::MinusEquals
+                    | Token::NewLine
+                    | Token::Percent
+                    | Token::PercentEquals
+                    | Token::Plus
+                    | Token::PlusEquals
+                    | Token::Slash
+                    | Token::SlashEquals
+                    | Token::Star
+                    | Token::StarEquals
+                    | Token::Tilde,
+                ) => true,
+                _ => false,
+            };
+
+        let keyword_allowed = ate_space
+            || match self.previous_token {
+                None => true,
+                Some(Token::Dedent | Token::Indent | Token::NewLine) => true,
+                _ => false,
+            };
 
         // Parsers are attempted in the order that ensures less specific tokens (e.g. identifiers)
         // will not be generated before more specific tokens (e.g. keywords).
         let result = alt((
-            preceded(space0, Self::parse_number),
-            preceded(space0, Self::parse_string),
-            preceded(ensure_separation, Self::parse_keyword),
-            preceded(space0, Self::parse_operator),
-            preceded(ensure_separation, Self::parse_identifier),
+            Self::parse_number,
+            Self::parse_string,
+            map_opt(cond(keyword_allowed, Self::parse_keyword), |opt| opt),
+            Self::parse_operator,
+            map_opt(cond(identifier_allowed, Self::parse_identifier), |opt| opt),
         ))(self.rest);
 
-        self.parsed_indentation = false;
         match result {
             Ok((rest, token)) => {
                 self.rest = rest;
-                self.new_line = token == Token::NewLine;
+                self.previous_token = Some(token.clone());
                 Some(Ok(token))
             }
             Err(_) => {
@@ -426,6 +480,7 @@ pub enum Token<'a> {
     Ampersand,
     AmpersandEquals,
     And,
+    Arrow,
     As,
     Assert,
     BackSlash,
@@ -481,7 +536,6 @@ pub enum Token<'a> {
     Minus,
     MinusEquals,
     NewLine,
-    None,
     Nonlocal,
     Not,
     NotEquals,
@@ -610,7 +664,15 @@ mod tests {
         use Token::*;
         assert_tokens_eq!(
             r"***==* None\/",
-            [DoubleStar, StarEquals, Equals, Star, None, BackSlash, Slash]
+            [
+                DoubleStar,
+                StarEquals,
+                Equals,
+                Star,
+                Identifier("None"),
+                BackSlash,
+                Slash
+            ]
         );
     }
 
@@ -826,5 +888,27 @@ continue
         );
         assert_tokens_eq!("if True:\n \t1\n\t2", LexError::TabError { at = 13, line = 3, column = 1 });
         assert_tokens_eq!("if True:\n\tif True:\n\t\t\t1\n\t\t2", LexError::TabError { at = 24, line = 3, column = 1});
+    }
+
+    #[test]
+    fn keywords() {
+        use Token::*;
+        assert_tokens_eq!(
+            "def as_foo(self, a: int) -> None:",
+            [
+                Def,
+                Identifier("as_foo"),
+                LeftParen,
+                Identifier("self"),
+                Comma,
+                Identifier("a"),
+                Colon,
+                Identifier("int"),
+                RightParen,
+                Arrow,
+                Identifier("None"),
+                Colon
+            ]
+        );
     }
 }
