@@ -16,32 +16,17 @@ where
         Self { tokens }
     }
 
-    pub fn parse(&mut self) -> Result<Option<Ast<'_>>, ParseError> {
+    pub fn parse(&mut self) -> Result<Option<Statement>, ParseError> {
         todo!()
     }
 
-    fn parse_expression(&mut self) -> Result<Option<Ast<'_>>, ParseError> {
+    fn parse_expression(&mut self) -> Result<Option<Statement>, ParseError> {
         todo!()
     }
 
-    fn parse_expression_bp(&mut self) -> Result<Option<Ast<'_>>, ParseError> {
+    fn parse_expression_bp(&mut self) -> Result<Option<Statement>, ParseError> {
         todo!()
     }
-}
-
-pub enum Ast<'a> {
-    Atom(Atom<'a>),
-    Cons(Operand, Vec<Ast<'a>>),
-}
-
-pub enum Atom<'a> {
-    Complex(&'a str),
-    False,
-    Float(&'a str),
-    Int(&'a str),
-    None,
-    String(&'a str),
-    True,
 }
 
 pub enum Operand {
@@ -49,7 +34,6 @@ pub enum Operand {
     AmpersandEquals,
     And,
     As,
-    Assert,
     Bar,
     BarEquals,
     Carat,
@@ -68,12 +52,15 @@ pub enum Operand {
     DoubleStarEquals,
     Equals,
     GreaterThan,
+    GreaterThanEquals,
     In,
     Is,
     LessThan,
+    LessThanEquals,
     Minus,
     MinusEquals,
     Not,
+    NotEquals,
     Or,
     Percent,
     PercentEquals,
@@ -86,48 +73,51 @@ pub enum Operand {
     Tilde,
 }
 
-fn infix_binding_power(operand: &Operand) -> (u8, u8) {
-    use Operand::*;
-    match operand {
-        Ampersand => todo!(),
-        AmpersandEquals => todo!(),
-        And => todo!(),
-        As => todo!(),
-        Assert => todo!(),
-        Bar => todo!(),
-        BarEquals => todo!(),
-        Carat => todo!(),
-        CaratEquals => todo!(),
-        Colon => todo!(),
-        ColonEquals => todo!(),
-        Comma => todo!(),
-        Dot => todo!(),
-        DoubleGreaterThan => todo!(),
-        DoubleGreaterThanEquals => todo!(),
-        DoubleLessThan => todo!(),
-        DoubleLessThanEquals => todo!(),
-        DoubleSlash => todo!(),
-        DoubleSlashEquals => todo!(),
-        DoubleStar => todo!(),
-        DoubleStarEquals => todo!(),
-        Equals => todo!(),
-        GreaterThan => todo!(),
-        In => todo!(),
-        Is => todo!(),
-        LessThan => todo!(),
-        Minus => todo!(),
-        MinusEquals => todo!(),
-        Not => todo!(),
-        Or => todo!(),
-        Percent => todo!(),
-        PercentEquals => todo!(),
-        Plus => todo!(),
-        PlusEquals => todo!(),
-        Slash => todo!(),
-        SlashEquals => todo!(),
-        Star => todo!(),
-        StarEquals => todo!(),
-        Tilde => todo!(),
+impl Operand {
+    fn prefix_binding_power(&self) -> Option<u8> {
+        use Operand::*;
+        match *self {
+            Not => Some(16),
+            Tilde => Some(15),
+            Minus | Plus => Some(14),
+            _ => None,
+        }
+    }
+
+    fn infix_binding_power(&self) -> (u8, u8) {
+        use Operand::*;
+        match *self {
+            Dot => (17, 17),
+            Not => (16, 16),
+            DoubleStar => (15, 14),
+            Tilde => (15, 15),
+            DoubleSlash | Percent | Slash | Star => (13, 13),
+            Minus | Plus => (12, 12),
+            DoubleGreaterThan | DoubleLessThan => (11, 11),
+            Ampersand => (10, 10),
+            Carat => (9, 9),
+            Bar => (8, 8),
+            In | Is => (7, 7),
+            As | GreaterThan | GreaterThanEquals | LessThan | LessThanEquals | NotEquals => (6, 6),
+            ColonEquals => (5, 4),
+            And => (4, 5),
+            Or => (3, 6),
+            AmpersandEquals
+            | BarEquals
+            | CaratEquals
+            | DoubleGreaterThanEquals
+            | DoubleLessThanEquals
+            | DoubleSlashEquals
+            | DoubleStarEquals
+            | Equals
+            | MinusEquals
+            | PercentEquals
+            | PlusEquals
+            | SlashEquals
+            | StarEquals => (2, 1),
+            Comma => (1, 1),
+            Colon => (0, 0),
+        }
     }
 }
 
@@ -141,11 +131,13 @@ pub enum Number {
 }
 
 pub enum Expression {
+    Boolean(bool),
     Lambda {
         arguments: Vec<String>,
         body: Box<Expression>,
     },
     Literal(String),
+    None,
     Number(Number),
     Operand {
         operand: Operand,
